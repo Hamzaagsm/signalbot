@@ -38,10 +38,12 @@ import java.util.Set;
  * fire on the same candle (confluence). >= 3 points = "STRONG".
  *
  * Results: after the signalled next candle closes, its direction is
- * compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall
- * AND per strategy kind.
+ * compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall,
+ * per strategy kind, AND per (source, kind) — v1.1 adds a feed "source"
+ * stamp ("quotex" vs "realmarket") so the demo record can show which
+ * feed actually performs better.
  *
- * NO orders are placed anywhere — v1 is a signal-only bot by design.
+ * NO orders are placed anywhere — the bot is signal-only by design.
  *
  * Feed format: {@code feed(assetKey, data)} normalises raw Quotex
  * depth-stream payloads (JSONObject / JSONArray) into price points
@@ -56,6 +58,12 @@ public class SignalsEngine {
         KIND_LABELS.put("perfect", "Perfect Candle");
         KIND_LABELS.put("engulfing", "Engulfing");
         KIND_LABELS.put("pinbar", "Pin Bar");
+    }
+
+    public static final Map<String, String> SOURCE_LABELS = new LinkedHashMap<>();
+    static {
+        SOURCE_LABELS.put("quotex", "Quotex");
+        SOURCE_LABELS.put("realmarket", "Real Market");
     }
 
     // ── data classes ──────────────────────────────────────────────────
@@ -113,16 +121,24 @@ public class SignalsEngine {
         public final int strength;      // agreement score
         public final String grade;      // "STRONG" / "NORMAL" / "LIGHT"
         public final String detail;     // e.g. "body 91%" / "wick 74%"
+        public final String source;     // feed that produced it: "quotex" / "realmarket"
         public String result;           // "WIN" / "LOSS" / "DRAW" or null
         public Double resultClose;
 
         public Signal(String asset, String assetKey, int timeframe, String direction,
                       String kind, long candleStart, long issuedAt, int strength,
                       String grade, String detail) {
+            this(asset, assetKey, timeframe, direction, kind, candleStart, issuedAt,
+                    strength, grade, detail, "quotex");
+        }
+
+        public Signal(String asset, String assetKey, int timeframe, String direction,
+                      String kind, long candleStart, long issuedAt, int strength,
+                      String grade, String detail, String source) {
             this.asset = asset; this.assetKey = assetKey; this.timeframe = timeframe;
             this.direction = direction; this.kind = kind; this.candleStart = candleStart;
             this.issuedAt = issuedAt; this.strength = strength; this.grade = grade;
-            this.detail = detail;
+            this.detail = detail; this.source = source;
         }
 
         public long targetStart() { return candleStart + timeframe; }
@@ -130,6 +146,11 @@ public class SignalsEngine {
         public String kindLabel() {
             String l = KIND_LABELS.get(kind);
             return l != null ? l : kind;
+        }
+
+        public String sourceLabel() {
+            String l = SOURCE_LABELS.get(source);
+            return l != null ? l : source;
         }
     }
 
@@ -367,6 +388,7 @@ public class SignalsEngine {
     public final boolean rsiFilter;
     public final double rsiOb, rsiOs;
     public final int maxSignals;                  // 0 = unlimited (issued count)
+    public final String source;                   // feed stamp for stats/history
 
     public OnSignal onSignal;
     public OnResult onResult;
@@ -380,12 +402,23 @@ public class SignalsEngine {
     public final List<Signal> history = new ArrayList<>();
     public final Stats stats = new Stats();
     public final Map<String, Stats> statsByKind = new LinkedHashMap<>();
+    /** Per (source, kind) stats; key = source + "|" + kind. */
+    public final Map<String, Stats> statsBySourceKind = new LinkedHashMap<>();
     public int issued = 0;
 
     public SignalsEngine(Map<String, String> assets, List<Integer> timeframes,
                          double thresholdPct, Set<String> strategies,
                          boolean trendFilter, boolean rsiFilter,
                          double rsiOverbought, double rsiOversold, int maxSignals) {
+        this(assets, timeframes, thresholdPct, strategies, trendFilter, rsiFilter,
+                rsiOverbought, rsiOversold, maxSignals, "quotex");
+    }
+
+    public SignalsEngine(Map<String, String> assets, List<Integer> timeframes,
+                         double thresholdPct, Set<String> strategies,
+                         boolean trendFilter, boolean rsiFilter,
+                         double rsiOverbought, double rsiOversold, int maxSignals,
+                         String source) {
         this.assets = new LinkedHashMap<>(assets);
         this.timeframes = new ArrayList<>(timeframes);
         this.thresholdPct = thresholdPct;
@@ -395,6 +428,7 @@ public class SignalsEngine {
         this.rsiOb = rsiOverbought;
         this.rsiOs = rsiOversold;
         this.maxSignals = maxSignals;
+        this.source = source;
         for (String key : this.assets.keySet()) {
             for (int tf : this.timeframes) {
                 final String k = key;
@@ -404,7 +438,10 @@ public class SignalsEngine {
                 prevCandle.put(streamKey(k, t), null);
             }
         }
-        for (String kind : KIND_LABELS.keySet()) statsByKind.put(kind, new Stats());
+        for (String kind : KIND_LABELS.keySet()) {
+            statsByKind.put(kind, new Stats());
+            statsBySourceKind.put(sourceKindKey(source, kind), new Stats());
+        }
     }
 
     /** Convenience constructor with the EXE's default RSI bounds (70/30). */
@@ -415,7 +452,23 @@ public class SignalsEngine {
                 70.0, 30.0, maxSignals);
     }
 
+    /** Convenience constructor with default RSI bounds + a feed source stamp. */
+    public SignalsEngine(Map<String, String> assets, List<Integer> timeframes,
+                         double thresholdPct, Set<String> strategies,
+                         boolean trendFilter, boolean rsiFilter, int maxSignals,
+                         String source) {
+        this(assets, timeframes, thresholdPct, strategies, trendFilter, rsiFilter,
+                70.0, 30.0, maxSignals, source);
+    }
+
     private static String streamKey(String assetKey, int tf) { return assetKey + "@" + tf; }
+
+    public static String sourceKindKey(String source, String kind) { return source + "|" + kind; }
+
+    /** Per-(source, kind) stats, or null when nothing was recorded for it. */
+    public Stats statsFor(String source, String kind) {
+        return statsBySourceKind.get(sourceKindKey(source, kind));
+    }
 
     // -- input ----------------------------------------------------------
 
@@ -449,6 +502,8 @@ public class SignalsEngine {
                 sig.resultClose = candle.close;
                 stats.record(sig.result);
                 statsByKind.get(sig.kind).record(sig.result);
+                statsBySourceKind.computeIfAbsent(
+                        sourceKindKey(sig.source, sig.kind), k -> new Stats()).record(sig.result);
                 if (onResult != null) onResult.onResult(sig);
             }
         }
@@ -523,7 +578,7 @@ public class SignalsEngine {
             String grade = strength >= 3 ? "STRONG" : (strength == 2 ? "NORMAL" : "LIGHT");
             Signal sig = new Signal(
                     assets.get(assetKey), assetKey, tf, direction, kind,
-                    candle.start, candle.start + tf, strength, grade, detail);
+                    candle.start, candle.start + tf, strength, grade, detail, source);
             pending.computeIfAbsent(stream, k -> new ArrayList<>()).add(sig);
             history.add(sig);
             issued += 1;
