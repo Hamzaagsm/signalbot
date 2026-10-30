@@ -21,9 +21,10 @@ public class LoginActivity extends Activity {
 
     public static final String PREFS = "signalbot_prefs";
     private EditText emailEt, pwEt;
+    private EditText iqEmailEt, iqPwEt;
     private CheckBox rememberCb;
-    private Button loginBtn;
-    private TextView statusTv;
+    private Button loginBtn, iqLoginBtn;
+    private TextView statusTv, iqStatusTv;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -43,14 +44,21 @@ public class LoginActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Perfect Candle Signals v1.1 — SIGNAL ONLY, no auto trade");
+        sub.setText("Perfect Candle Signals v1.2 — SIGNAL ONLY, no auto trade");
         sub.setTextColor(Color.parseColor("#888888"));
         sub.setGravity(Gravity.CENTER);
         root.addView(sub);
         root.addView(spacer(30));
 
-        emailEt = field(root, "Email:");
-        pwEt = field(root, "Password:");
+        TextView qxLbl = new TextView(this);
+        qxLbl.setText("— QUOTEX —");
+        qxLbl.setTextColor(Color.parseColor("#00d4aa"));
+        qxLbl.setGravity(Gravity.CENTER);
+        root.addView(qxLbl);
+        root.addView(spacer(8));
+
+        emailEt = field(root, "Quotex Email:");
+        pwEt = field(root, "Quotex Password:");
         pwEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
 
         SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -65,7 +73,7 @@ public class LoginActivity extends Activity {
         root.addView(spacer(16));
 
         loginBtn = new Button(this);
-        loginBtn.setText("🔑 LOGIN");
+        loginBtn.setText("🔑 QUOTEX LOGIN");
         loginBtn.setTextSize(18);
         loginBtn.setBackgroundColor(Color.parseColor("#00d4aa"));
         loginBtn.setTextColor(Color.BLACK);
@@ -87,6 +95,35 @@ public class LoginActivity extends Activity {
         statusTv.setTextColor(Color.parseColor("#ffaa00"));
         statusTv.setGravity(Gravity.CENTER);
         root.addView(statusTv);
+        root.addView(spacer(24));
+
+        // v1.2: IQ Option login — apna IQ account, PRACTICE (DEMO) par verify.
+        TextView iqLbl = new TextView(this);
+        iqLbl.setText("— IQ OPTION —");
+        iqLbl.setTextColor(Color.parseColor("#00d4aa"));
+        iqLbl.setGravity(Gravity.CENTER);
+        root.addView(iqLbl);
+        root.addView(spacer(8));
+
+        iqEmailEt = field(root, "IQ Option Email:");
+        iqPwEt = field(root, "IQ Option Password:");
+        iqPwEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        iqEmailEt.setText(p.getString("iq_email", ""));
+        iqPwEt.setText(p.getString("iq_password", ""));
+
+        iqLoginBtn = new Button(this);
+        iqLoginBtn.setText("🔑 IQ OPTION LOGIN");
+        iqLoginBtn.setTextSize(18);
+        iqLoginBtn.setBackgroundColor(Color.parseColor("#00d4aa"));
+        iqLoginBtn.setTextColor(Color.BLACK);
+        root.addView(iqLoginBtn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(spacer(12));
+
+        iqStatusTv = new TextView(this);
+        iqStatusTv.setTextColor(Color.parseColor("#ffaa00"));
+        iqStatusTv.setGravity(Gravity.CENTER);
+        root.addView(iqStatusTv);
         root.addView(spacer(16));
 
         TextView warn = new TextView(this);
@@ -98,6 +135,7 @@ public class LoginActivity extends Activity {
         setContentView(new ScrollView(this) {{ addView(root); }});
 
         loginBtn.setOnClickListener(v -> doLogin());
+        iqLoginBtn.setOnClickListener(v -> doIqLogin());
         rmBtn.setOnClickListener(v -> {
             Intent i = new Intent(this, MainActivity.class);
             i.putExtra("source", "realmarket");
@@ -174,6 +212,53 @@ public class LoginActivity extends Activity {
                 runOnUiThread(() -> {
                     loginBtn.setEnabled(true);
                     Toast.makeText(this, "Login fail — neeche dekho", Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+
+    private void setIqStatus(final String s) {
+        runOnUiThread(() -> iqStatusTv.setText(s));
+    }
+
+    /** v1.2: IQ Option login verify (HTTP login + websocket auth, PRACTICE). */
+    private void doIqLogin() {
+        final String email = iqEmailEt.getText().toString().trim();
+        final String pw = iqPwEt.getText().toString();
+        if (email.isEmpty() || pw.isEmpty()) {
+            Toast.makeText(this, "IQ Option Email aur Password likho!", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        iqLoginBtn.setEnabled(false);
+        setIqStatus("⏳ IQ Option se connect ho raha...");
+        new Thread(() -> {
+            try {
+                IqOptionFeed.Balances bal = IqOptionFeed.verifyLogin(email, pw);
+                if (rememberCb.isChecked()) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .putString("iq_email", email).putString("iq_password", pw).apply();
+                } else {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .putString("iq_email", email).putString("iq_password", "").apply();
+                }
+                String balTxt = bal.practice != null
+                        ? String.format(java.util.Locale.US, " | PRACTICE $%,.2f", bal.practice) : "";
+                setIqStatus("✅ IQ Option login OK!" + balTxt);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "✅ IQ Option Login OK!", Toast.LENGTH_SHORT).show();
+                    Intent i = new Intent(this, MainActivity.class);
+                    i.putExtra("source", "iqoption");
+                    startActivity(i);
+                    finish();
+                });
+            } catch (Exception e) {
+                String msg = e.getMessage();
+                if (isDnsError(msg))
+                    msg += "\n\n💡 VPN on karke dobara try karo! (Pakistan me kabhi ISP block hota hai)";
+                setIqStatus("❌ " + msg);
+                runOnUiThread(() -> {
+                    iqLoginBtn.setEnabled(true);
+                    Toast.makeText(this, "IQ login fail — neeche dekho", Toast.LENGTH_LONG).show();
                 });
             }
         }).start();
