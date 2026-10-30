@@ -525,7 +525,7 @@ class SignalBotGUI:
 # SignalBotGUI.on_signal / SignalEngine.on_signal and results are only
 # TRACKED, never traded. A future auto-trade version would subscribe an
 # additional on_signal handler here and call api.buy(...) with the
-# user's chosen stake/expiry. Intentionally not implemented in v1.
+# user's chosen stake/expiry. Intentionally not implemented.
 
 
 if __name__ == "__main__":
