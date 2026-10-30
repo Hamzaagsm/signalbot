@@ -27,14 +27,18 @@ caller's callback — the GUI feeds them into the SAME SignalEngine the
 Quotex stream uses, so strategies/filters/stats behave identically.
 The only difference is the source stamp on the signals.
 
+HTTP is done with the Python standard library only (urllib), so the
+frozen EXE needs no extra dependency for this feed.
+
 SIGNAL ONLY: nothing here (or anywhere in this bot) places orders.
 """
 
+import json
 import threading
 import time
+import urllib.parse
+import urllib.request
 from typing import Callable, Dict, List, Optional, Tuple
-
-import requests
 
 # Asset code (as used by the GUI) -> Yahoo Finance symbol.
 YAHOO_SYMBOLS: Dict[str, str] = {
@@ -52,6 +56,13 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
 
 SOURCE_ID = "realmarket"
 SOURCE_LABEL = "Real Market"
+
+
+def _fetch_json(url: str, timeout: float):
+    """Default HTTP GET -> parsed JSON (stdlib only)."""
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def yahoo_symbol(code: str) -> str:
@@ -99,13 +110,13 @@ class RealMarketFeed:
                  on_status: Optional[Callable[[str], None]] = None,
                  poll_interval: float = 2.0,
                  timeout: float = 6.0,
-                 session=None):
+                 fetcher: Optional[Callable[[str, float], dict]] = None):
         self.assets = list(assets)
         self.on_point = on_point
         self.on_status = on_status
         self.poll_interval = float(poll_interval)
         self.timeout = float(timeout)
-        self.session = session or requests.Session()
+        self._fetcher = fetcher or _fetch_json
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
         self._lock = threading.Lock()
@@ -171,10 +182,8 @@ class RealMarketFeed:
     def fetch_quote(self, code: str) -> Optional[Tuple[float, int]]:
         """One HTTP poll for one asset; (price, market_ts) or None."""
         url = CHART_URL.format(symbol=yahoo_symbol(code))
-        resp = self.session.get(url, params={"interval": "1m", "range": "1d"},
-                                headers=HEADERS, timeout=self.timeout)
-        resp.raise_for_status()
-        return parse_chart_payload(resp.json())
+        url += "?" + urllib.parse.urlencode({"interval": "1m", "range": "1d"})
+        return parse_chart_payload(self._fetcher(url, self.timeout))
 
     def handle_quote(self, code: str, price: float, market_ts: int,
                      now: Optional[float] = None) -> bool:
