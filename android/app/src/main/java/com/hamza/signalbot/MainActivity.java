@@ -27,6 +27,7 @@ import android.widget.Toast;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,13 +38,14 @@ import java.util.Map;
  */
 public class MainActivity extends Activity implements SignalBotEngine.Ui {
 
-    private Spinner modeSp;
+    private Spinner modeSp, sourceSp;
     private Button startBtn, stopBtn, settingsBtn;
     private TextView balDemoTv, balRealTv;
     private TextView bannerTv, statsTv, kindStatsTv, statusTv, logTv, histTv;
     private ScrollView logScroll;
     private SignalBotEngine engine;
     private boolean realConfirmed = false;
+    private String currentSource = "quotex";
     private double lastDemoBal = -1, lastRealBal = -1;
 
     @Override
@@ -63,11 +65,37 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         title.setGravity(Gravity.CENTER);
         root.addView(title);
         TextView ver = new TextView(this);
-        ver.setText("Perfect Candle Signals (30s / 1m) — Quotex — SIGNAL ONLY, no auto trade");
+        ver.setText("Perfect Candle Signals v1.1 (30s / 1m) — SIGNAL ONLY, no auto trade");
         ver.setTextColor(Color.parseColor("#666677"));
         ver.setTextSize(11);
         ver.setGravity(Gravity.CENTER);
         root.addView(ver);
+        root.addView(spacer(8));
+
+        // ---- signal source (v1.1) ----
+        LinearLayout srcRow = new LinearLayout(this);
+        srcRow.setOrientation(LinearLayout.HORIZONTAL);
+        srcRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView srcLbl = new TextView(this);
+        srcLbl.setText("Signal Source:");
+        srcLbl.setTextColor(Color.WHITE);
+        srcRow.addView(srcLbl, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        sourceSp = new Spinner(this);
+        ArrayAdapter<String> sa = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item,
+                new String[]{"Quotex Feed", "Real Market Feed"});
+        sa.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sourceSp.setAdapter(sa);
+        srcRow.addView(sourceSp, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 2));
+        root.addView(srcRow);
+        TextView srcNote = new TextView(this);
+        srcNote.setText("Real Market = asal forex data (Yahoo) — Quotex login NAHI chahiye");
+        srcNote.setTextColor(Color.parseColor("#666677"));
+        srcNote.setTextSize(11);
+        srcNote.setGravity(Gravity.CENTER);
+        root.addView(srcNote);
         root.addView(spacer(8));
 
         // ---- balance card ----
@@ -198,8 +226,31 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
 
         setContentView(new ScrollView(this) {{ addView(root); }});
 
-        log("Signal Bot v1.0 tayyar! Pehle DEMO par test karo. ⚠️");
+        log("Signal Bot v1.1 tayyar! Pehle DEMO par test karo. ⚠️");
         log("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain (Settings).");
+        log("Source upar se chuno: Quotex Feed (OTC) ya Real Market Feed (asal market, login nahi).");
+
+        // Login screen se "Real Market" wala rasta aaye to wahi source pehle se chuna ho.
+        if ("realmarket".equals(getIntent().getStringExtra("source"))) {
+            currentSource = "realmarket";
+            sourceSp.setSelection(1);
+            applySourceUi();
+        }
+        sourceSp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
+                String src = pos == 1 ? "realmarket" : "quotex";
+                if (!src.equals(currentSource)) {
+                    currentSource = src;
+                    applySourceUi();
+                    if (src.equals("realmarket")) {
+                        log("Real Market mode: Quotex login ki zaroorat NAHI — signals asal market data (Yahoo Finance) se ayenge.");
+                    } else {
+                        log("Quotex mode: signals Quotex OTC candles se ayenge — login lazmi hai.");
+                    }
+                }
+            }
+            public void onNothingSelected(android.widget.AdapterView<?> p) {}
+        });
 
         modeSp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
@@ -213,6 +264,14 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         stopBtn.setOnClickListener(v -> stopBot());
 
         loadBalances();
+    }
+
+    private boolean isRealMarket() { return "realmarket".equals(currentSource); }
+
+    /** EXE _apply_source_ui ka mirror: Real Market me login/mode band. */
+    private void applySourceUi() {
+        boolean rm = isRealMarket();
+        if (modeSp != null) modeSp.setEnabled(!rm);
     }
 
     /** Balance card ke liye halki si live check (DEMO login se). */
@@ -310,15 +369,17 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
 
     // ── bot control ───────────────────────────────────────────────────
     private void startBot() {
+        boolean rm = isRealMarket();
         SharedPreferences p = getSharedPreferences(LoginActivity.PREFS, MODE_PRIVATE);
         String email = p.getString("email", "");
         String pw = p.getString("password", "");
-        if (email.isEmpty() || pw.isEmpty()) {
+        // Real Market mode: Quotex login NAHI chahiye (EXE v1.1 jaisa).
+        if (!rm && (email.isEmpty() || pw.isEmpty())) {
             Toast.makeText(this, "Pehle login karo!", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
-        boolean isDemo = modeSp.getSelectedItemPosition() == 0;
+        boolean isDemo = rm || modeSp.getSelectedItemPosition() == 0;
         if (!isDemo && !realConfirmed) { askRealConfirm(); return; }
 
         BotSettings s = BotSettings.load(this);
@@ -333,7 +394,8 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         cfg.email = email;
         cfg.password = pw;
         cfg.isDemo = isDemo;
-        cfg.assetMap = s.assetMap();
+        cfg.source = currentSource;
+        cfg.assetMap = rm ? s.assetMapRealMarket() : s.assetMap();
         cfg.timeframes = s.timeframes();
         cfg.thresholdPct = s.thresholdPct;
         cfg.strategies = s.strategies();
@@ -346,12 +408,13 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
                 + " | Trend: " + (cfg.trendFilter ? "ON" : "OFF")
                 + " | RSI: " + (cfg.rsiFilter ? "ON" : "OFF")
                 + String.format(Locale.US, " | Body %.0f%%", cfg.thresholdPct)
-                + " | " + (isDemo ? "DEMO" : "⚠️ REAL"));
+                + " | " + (rm ? "REAL MARKET" : (isDemo ? "DEMO" : "⚠️ REAL")));
         bannerTv.setText("— signal ka intezar… —");
         bannerTv.setBackgroundColor(Color.parseColor("#1a1a2e"));
         bannerTv.setTextColor(Color.parseColor("#888888"));
         startBtn.setEnabled(false);
         settingsBtn.setEnabled(false);
+        sourceSp.setEnabled(false);
         stopBtn.setEnabled(true);
         engine = new SignalBotEngine(cfg, this);
         engine.start();
@@ -362,6 +425,8 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         runOnUiThread(() -> {
             startBtn.setEnabled(true);
             settingsBtn.setEnabled(true);
+            sourceSp.setEnabled(true);
+            applySourceUi();
             stopBtn.setEnabled(false);
             statusTv.setText("");
         });
@@ -401,19 +466,24 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
 
     @Override
     public void status(final String msg) {
-        runOnUiThread(() -> statusTv.setText(msg));
+        runOnUiThread(() -> {
+            statusTv.setText(msg);
+            // EXE jaisa: STALE par status laal, warna narangi.
+            statusTv.setTextColor(Color.parseColor(
+                    msg.contains("STALE") ? "#e94560" : "#ffaa00"));
+        });
     }
 
     @Override
     public void signal(final SignalsEngine.Signal sig) {
         String arrow = sig.direction.equals("call") ? "⬆ CALL" : "⬇ PUT";
-        log("🔔 SIGNAL [" + sig.kindLabel() + "] " + arrow + " " + sig.asset
+        log("🔔 SIGNAL [" + sig.sourceLabel() + "] [" + sig.kindLabel() + "] " + arrow + " " + sig.asset
                 + " " + tfLabel(sig.timeframe) + " — " + gradeText(sig)
                 + " (" + sig.detail + ") @ " + timeStr(sig.issuedAt));
         runOnUiThread(() -> {
             bannerTv.setText("🔔 " + arrow + " — " + sig.asset + " (" + tfLabel(sig.timeframe) + ")\n"
                     + sig.kindLabel() + " — " + gradeText(sig) + " — " + sig.detail
-                    + " — " + timeStr(sig.issuedAt));
+                    + " — " + timeStr(sig.issuedAt) + " — " + sig.sourceLabel());
             bannerTv.setBackgroundColor(Color.parseColor(
                     sig.direction.equals("call") ? "#14532d" : "#7f1d1d"));
             bannerTv.setTextColor(Color.WHITE);
@@ -442,10 +512,16 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
     public void stats(final SignalsEngine engine) {
         if (engine == null) return;
         final SignalsEngine.Stats st;
-        final Map<String, SignalsEngine.Stats> byKind;
+        final String srcLabel;
+        final Map<String, SignalsEngine.Stats> byKindSrc = new LinkedHashMap<>();
         synchronized (engine) {
             st = engine.stats;
-            byKind = engine.statsByKind;
+            srcLabel = SignalsEngine.SOURCE_LABELS.get(engine.source);
+            // EXE jaisa: sirf ACTIVE source ke per-(source, kind) stats.
+            for (String kind : SignalsEngine.KIND_LABELS.keySet()) {
+                SignalsEngine.Stats ks = engine.statsFor(engine.source, kind);
+                byKindSrc.put(kind, ks != null ? ks : engine.statsByKind.get(kind));
+            }
         }
         runOnUiThread(() -> {
             Double wp = st.winPct();
@@ -453,15 +529,17 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
                     + " | WIN: " + st.wins + " | LOSS: " + st.losses + " | DRAW: " + st.draws
                     + " | Win%: " + (wp == null ? "—" : String.format(Locale.US, "%.0f%%", wp)));
             StringBuilder sb = new StringBuilder();
+            sb.append(srcLabel != null ? srcLabel : engine.source).append(" — ");
             boolean first = true;
-            for (Map.Entry<String, SignalsEngine.Stats> e : byKind.entrySet()) {
+            for (Map.Entry<String, SignalsEngine.Stats> e : byKindSrc.entrySet()) {
                 if (!first) sb.append("  •  ");
                 first = false;
                 SignalsEngine.Stats ks = e.getValue();
                 Double kw = ks.winPct();
                 sb.append(SignalsEngine.KIND_LABELS.get(e.getKey()))
-                        .append(": ").append(ks.wins).append("W/").append(ks.losses).append("L")
-                        .append(kw == null ? "" : String.format(Locale.US, " (%.0f%%)", kw));
+                        .append(": ").append(ks.total).append(" signals, W").append(ks.wins)
+                        .append("/L").append(ks.losses)
+                        .append(kw == null ? " (—)" : String.format(Locale.US, " (%.0f%%)", kw));
             }
             kindStatsTv.setText(sb.toString());
         });
@@ -480,6 +558,8 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         runOnUiThread(() -> {
             startBtn.setEnabled(true);
             settingsBtn.setEnabled(true);
+            sourceSp.setEnabled(true);
+            applySourceUi();
             stopBtn.setEnabled(false);
             statusTv.setText("");
         });
@@ -503,6 +583,7 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
             else if (s.result.equals("LOSS")) { mark = "❌ LOSS"; color = "#ff5566"; }
             else { mark = "➖ DRAW"; color = "#aaaaaa"; }
             sb.append("<font color=\"#aaaaaa\">").append(timeStr(s.issuedAt)).append("</font> ")
+                    .append("[").append(s.sourceLabel()).append("] ")
                     .append(arrow).append(" <b>").append(s.asset).append("</b> ")
                     .append(tfLabel(s.timeframe)).append(" ")
                     .append(s.kindLabel()).append(" ")
