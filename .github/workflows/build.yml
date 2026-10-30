@@ -1,0 +1,29 @@
+name: Build Signal Bot EXE
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['gui.py', 'signals_engine.py', 'QuotexAPI/**', '.github/workflows/build.yml']
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Verify QuotexAPI import
+        run: python -c "from QuotexAPI import QuotexAPI, TradeDirection; print('QuotexAPI OK')"
+      - name: Run signal engine tests
+        run: python test_signals.py
+      - name: Build EXE
+        run: pyinstaller --onefile --windowed --name HamzaSignalBot --hidden-import QuotexAPI gui.py
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: HamzaSignalBot-exe
+          path: dist/HamzaSignalBot.exe
