@@ -40,14 +40,22 @@ Engulfing / Pin Bar) — on screen and in the log. Run it on demo and
 see for yourself which method actually performs. No method wins
 every trade; the record is kept in the open, not promised in advance.
 
-## Signal sources (v1.2)
+## Signal sources (v1.3)
 Pick the feed at the top of the window — the engine, strategies and
 result tracking are identical; only the candle source (and its stats
-column) changes:
+column) changes. **Every platform has its OWN separate login form** —
+no shared credentials anywhere:
 - **Quotex Feed** — Quotex OTC candles, Quotex login (v1.0 behaviour).
 - **IQ Option Feed** — IQ Option candles, IQ Option login,
   **PRACTICE (DEMO) balance by default**; regular pairs while the
   forex market is open, OTC pairs when it is closed (weekends).
+- **MT5 Feed** (v1.3, EXE only) — ticks from the MetaTrader 5
+  terminal installed on your PC (official `MetaTrader5` package),
+  with its own MT5 login (account number + password + server).
+  **DEMO account recommended.** The terminal must be installed and
+  running on the PC; if it is missing, the bot says so in plain
+  words instead of crashing. (No MT5 in the APK: there is no
+  official MT5 API for third-party Android apps.)
 - **Real Market Feed** — real forex quotes from Yahoo Finance over
   HTTPS; **no broker login at all** (binary prices move after the
   real market, so signals are read where the move starts).
