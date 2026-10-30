@@ -16,10 +16,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * Signal Bot session runner (counterpart of the Qx Bot's BotEngine,
  * but SIGNAL-ONLY: no stakes, no martingale, no orders — ever).
  *
- * Flow: connect -> login -> balances -> depth/follow (all selected
- * assets) -> depth events feed the SignalsEngine -> signals / results /
- * blocked notes stream back to the UI. The engine builds BOTH the 30s
- * and the 1m candles from the same tick stream, like the Windows EXE.
+ * Flow (Quotex source): connect -> login -> balances -> depth/follow
+ * (all selected assets) -> depth events feed the SignalsEngine ->
+ * signals / results / blocked notes stream back to the UI.
+ *
+ * v1.1 adds the Real Market source (EXE jaisa hi): Yahoo Finance
+ * polling via RealMarketFeed — NO Quotex login at all; the same engine
+ * gets the points, stamped source="realmarket". The engine builds BOTH
+ * the 30s and the 1m candles from the same tick stream, like the EXE.
  */
 public class SignalBotEngine {
 
@@ -27,6 +31,8 @@ public class SignalBotEngine {
         public Context context;
         public String email, password;
         public boolean isDemo = true;
+        /** "quotex" (default, v1.0 behaviour) or "realmarket" (v1.1). */
+        public String source = "quotex";
         /** asset_key -> display name, in selection order. */
         public LinkedHashMap<String, String> assetMap = new LinkedHashMap<>();
         public List<Integer> timeframes = new ArrayList<>();
@@ -54,6 +60,7 @@ public class SignalBotEngine {
     private volatile boolean running;
     private Thread worker;
     private SignalsEngine engine;
+    private RealMarketFeed feed;
     private final AtomicLong points = new AtomicLong();
 
     public SignalBotEngine(Config cfg, Ui ui) {
@@ -72,9 +79,12 @@ public class SignalBotEngine {
 
     public synchronized void stop() {
         running = false;
+        if (feed != null) feed.stop();
         if (worker != null) worker.interrupt();
-        for (String key : cfg.assetMap.keySet()) client.unfollowDepth(key);
-        client.disconnect();
+        if (!"realmarket".equals(cfg.source)) {
+            for (String key : cfg.assetMap.keySet()) client.unfollowDepth(key);
+            client.disconnect();
+        }
     }
 
     public boolean isRunning() { return running; }
@@ -83,6 +93,10 @@ public class SignalBotEngine {
     public SignalsEngine engine() { return engine; }
 
     private void loop() {
+        if ("realmarket".equals(cfg.source)) {
+            loopRealMarket();
+            return;
+        }
         try {
             ui.log("Quotex se connect ho raha...");
             client.connect();
@@ -151,5 +165,95 @@ public class SignalBotEngine {
                         + " updates) — perfect candle ka intezar…");
             }
         } catch (Exception ignored) {}
+    }
+
+    // ── Real Market mode (v1.1) ───────────────────────────────────────
+
+    private void loopRealMarket() {
+        try {
+            engine = new SignalsEngine(cfg.assetMap, cfg.timeframes, cfg.thresholdPct,
+                    cfg.strategies, cfg.trendFilter, cfg.rsiFilter, cfg.maxSignals,
+                    "realmarket");
+            engine.onSignal = s -> { ui.signal(s); ui.stats(engine); };
+            engine.onResult = s -> { ui.result(s); ui.stats(engine); };
+            engine.onBlocked = (kind, dir, why) -> ui.blocked(kind, dir, why);
+
+            feed = new RealMarketFeed(new ArrayList<>(cfg.assetMap.keySet()),
+                    (code, ts, price) -> {
+                        if (!running || engine == null) return;
+                        try {
+                            JSONObject j = new JSONObject();
+                            j.put("timestamp", ts);
+                            j.put("price", price);
+                            synchronized (engine) {
+                                engine.feed(code, j);
+                            }
+                            points.incrementAndGet();
+                        } catch (Exception e) {
+                            ui.log("⚠️ Data process error: " + e.getMessage());
+                        }
+                    },
+                    text -> ui.log(text));
+
+            ui.log("📡 Real Market (Yahoo Finance) polling shuru — koi login nahi, koi account nahi, sirf signals.");
+            ui.status("📡 Real Market: pehle data ka intezar…");
+            ui.log("Note: Trend/RSI ko candles ki history chahiye — shuru me kuch waqt warmup lagega.");
+            feed.start();
+
+            long lastTick = 0;
+            while (running) {
+                Thread.sleep(250);
+                long now = System.currentTimeMillis();
+                if (now - lastTick >= 2000) {   // EXE ka status tick: har ~2s
+                    lastTick = now;
+                    rmStatusTick();
+                }
+            }
+            ui.log("Session khatam.");
+        } catch (InterruptedException e) {
+            ui.log("Session roka gaya.");
+        } catch (Exception e) {
+            ui.log("❌ Fatal: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        } finally {
+            running = false;
+            if (feed != null) feed.stop();
+            SignalsEngine e = engine;
+            String summary;
+            if (e != null) {
+                SignalsEngine.Stats st = e.stats;
+                Double wp = st.winPct();
+                summary = String.format(Locale.US,
+                        "Session khatam: %d signals | WIN %d | LOSS %d | DRAW %d | Win%% %s",
+                        st.total, st.wins, st.losses, st.draws,
+                        wp == null ? "—" : String.format(Locale.US, "%.0f%%", wp));
+            } else {
+                summary = "Session khatam (engine start nahi hua).";
+            }
+            ui.finished(summary);
+        }
+    }
+
+    /** EXE _rm_status_tick ka mirror: source + last update + STALE + lag. */
+    private void rmStatusTick() {
+        RealMarketFeed f = feed;
+        if (f == null || !running) return;
+        Double lp = f.lastPoll();
+        if (lp == null) {
+            ui.status("📡 Real Market: pehle data ka intezar…");
+        } else if (f.isStale(10.0, RealMarketFeed.nowSeconds())) {
+            ui.status("⚠️ STALE — Real Market data ruk gaya hai! Last update "
+                    + timeStr(lp.longValue()) + " — connection check karo");
+        } else {
+            Double lag = f.dataLag();
+            String lagTxt = lag != null
+                    ? String.format(Locale.US, " • data lag ~%.0fs", lag) : "";
+            ui.status("📡 Real Market (Yahoo) • last update " + timeStr(lp.longValue())
+                    + lagTxt + " • " + points.get() + " points — perfect candle ka intezar…");
+        }
+    }
+
+    private static String timeStr(long unixSec) {
+        return new java.text.SimpleDateFormat("HH:mm:ss", Locale.US)
+                .format(new java.util.Date(unixSec * 1000));
     }
 }
