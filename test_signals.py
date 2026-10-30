@@ -180,6 +180,76 @@ check("ms ts normalised", extract_points({"timestamp": 1700000000000, "price": 1
 check("list payload", len(extract_points([{"time": 1700000000, "close": 2.5}, [1700000060, 2.6]])) == 2)
 check("nested OHLC", extract_points({"data": {"timestamp": 1700000000, "open": 1, "high": 2, "low": 0.5, "close": 1.5}})[0][2]["high"] == 2)
 
+# ── v1.1 REAL MARKET FEED ─────────────────────────────────────────────
+from realmarket_feed import RealMarketFeed, yahoo_symbol, parse_chart_payload
+
+check("yahoo symbol mapping (all 6 pairs)",
+      [yahoo_symbol(c) for c in ("EURUSD", "GBPUSD", "USDJPY", "EURGBP", "AUDUSD", "EURJPY")]
+      == ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURGBP=X", "AUDUSD=X", "EURJPY=X"])
+check("chart payload parsed",
+      parse_chart_payload({"chart": {"result": [{"meta": {"regularMarketPrice": 1.1193,
+      "regularMarketTime": 1793334045}}]}}) == (1.1193, 1793334045))
+check("chart error payload -> None",
+      parse_chart_payload({"finance": {"result": None, "error": {"code": "Unauthorized"}}}) is None
+      and parse_chart_payload({"chart": {"result": None}}) is None
+      and parse_chart_payload({"chart": {"result": [{"meta": {"regularMarketPrice": 0,
+      "regularMarketTime": 1793334045}}]}}) is None)
+
+# staleness flag logic (no network: quotes injected via handle_quote)
+_feed = RealMarketFeed(["EURUSD"], on_point=lambda *a: None)
+check("feed stale before any poll", _feed.is_stale(10) is True)
+_now = 1793334000.0
+_feed.handle_quote("EURUSD", 1.1193, 1793333995, now=_now)
+check("feed fresh within 10s of a poll", _feed.is_stale(10, now=_now + 5) is False)
+check("feed stale 11s after last poll", _feed.is_stale(10, now=_now + 11) is True)
+check("data lag uses market timestamp", _feed.data_lag(now=_now) == 5.0)
+
+# duplicate quotes are not re-emitted (polling the same snapshot twice)
+_pts = []
+_feed2 = RealMarketFeed(["EURUSD"], on_point=lambda c, t, p: _pts.append((c, t, p)))
+_feed2.handle_quote("EURUSD", 1.1000, 1793334000, now=1793334001.0)
+_feed2.handle_quote("EURUSD", 1.1000, 1793334000, now=1793334002.0)
+_feed2.handle_quote("EURUSD", 1.1001, 1793334003, now=1793334004.0)
+check("unchanged quote de-duplicated", len(_pts) == 2 and _pts[1][2] == 1.1001)
+
+# points -> engine candles: same aggregation path as the Quotex feed,
+# driven through RealMarketFeed.handle_quote exactly like the GUI does
+_rm_sigs, _rm_res, _rm_candles = [], [], []
+_rm_eng = SignalEngine({"USDJPY": "USD/JPY"}, [30], threshold_pct=85.0,
+                       strategies=("perfect",), trend_filter=False, rsi_filter=False,
+                       source="realmarket",
+                       on_signal=_rm_sigs.append, on_result=_rm_res.append,
+                       on_candle=lambda k, t, c: _rm_candles.append(c))
+_rm_feed = RealMarketFeed(["USDJPY"],
+                          on_point=lambda code, ts, p: _rm_eng.feed(
+                              code, {"timestamp": ts, "price": p}))
+for _ts, _p in [(B, 100.00), (B + 5, 100.10), (B + 10, 100.20), (B + 20, 100.28),
+                (B + 29, 100.30), (B + 30, 100.30), (B + 35, 100.40),
+                (B + 59, 100.45), (B + 60, 100.45)]:
+    _rm_feed.handle_quote("USDJPY", _p, _ts, now=float(_ts))
+_c0 = _rm_candles[0]
+check("RM points aggregate into 30s candle",
+      (_c0.open, _c0.high, _c0.low, _c0.close) == (100.00, 100.30, 100.00, 100.30))
+check("RM perfect candle -> CALL signal", len(_rm_sigs) == 2
+      and all(s.direction == "call" for s in _rm_sigs))  # target candle is itself 100%-body
+check("signal stamped with its source",
+      _rm_sigs and _rm_sigs[0].source == "realmarket" and _rm_sigs[0].source_label == "Real Market")
+check("RM target up -> WIN", len(_rm_res) == 1 and _rm_res[0].result == "WIN")
+check("per-(source, kind) stats recorded",
+      _rm_eng.stats_by_source_kind[("realmarket", "perfect")].wins == 1
+      and _rm_eng.stats_by_source_kind[("realmarket", "perfect")].total == 1)
+check("other source untouched in same engine",
+      ("quotex", "perfect") not in _rm_eng.stats_by_source_kind
+      or _rm_eng.stats_by_source_kind[("quotex", "perfect")].total == 0)
+
+# default source stays "quotex" (v1.0 behaviour unchanged)
+eng, sigs, res, _ = make_engine()
+feed_candle(eng, B, 1.0000, 1.00100, 0.99990, 1.00095)
+feed_candle(eng, B + 60, 1.00095, 1.00150, 1.00090, 1.00120)
+check("default engine stamps quotex source",
+      sigs and sigs[0].source == "quotex"
+      and eng.stats_by_source_kind[("quotex", "perfect")].wins == 1)
+
 print()
 if FAILED:
     print("FAILED:", FAILED); sys.exit(1)
