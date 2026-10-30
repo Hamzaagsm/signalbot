@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hamza Signal Bot v1.2 - GUI.
+"""Hamza Signal Bot v1.3 - GUI.
 
 PERFECT-CANDLE SIGNAL bot (the "Chinese method"):
 watches 30-second and 1-minute candles; when a candle closes with its
@@ -20,6 +20,18 @@ binary options par work kare, sirf Quotex nahi"):
     balance by default; regular pairs in market hours, OTC pairs
     when the forex market is closed. Same engine, source stamp
     "iqoption", stats kept separately again.
+  * HAR platform ka login ALAG hai (Hamza ki wazahat): Quotex Login
+    frame Quotex ke liye, IQ Option Login frame IQ Option ke liye —
+    koi shared login form nahi; jo source select ho, usi ka login
+    frame active hota hai.
+
+v1.3 adds a fourth source (Phase 2, EXE only):
+  * MT5 Feed - MetaTrader 5 terminal (mt5_feed.py): apna alag MT5
+    login (account number + password + server). Official MetaTrader5
+    package PC par installed MT5 terminal se ticks leta hai; 30s/1m
+    candles wahi engine banata hai, source stamp "mt5". DEMO account
+    recommended. (APK me MT5 nahi — third-party Android apps ke liye
+    koi official MT5 API nahi hai.)
 
 SIGNAL ONLY - this bot places NO trades. It shows a big banner, plays a
 sound and logs the signal; the user places the trade wherever he wants.
@@ -57,15 +69,17 @@ DEFAULT_ASSETS = {"EURUSD", "GBPUSD"}
 class SignalBotGUI:
     def __init__(self, root):
         self.root = root
-        root.title("Hamza Signal Bot v1.2 🔔")
-        root.geometry("740x1000")
+        root.title("Hamza Signal Bot v1.3 🔔")
+        root.geometry("740x1060")
         root.configure(bg="#0a0a14")
         self.running = False
         self.engine = None
         self.feed = None       # RealMarketFeed when source = realmarket
         self.iq_feed = None    # IqOptionFeed when source = iqoption
+        self.mt5_feed = None   # Mt5Feed when source = mt5 (v1.3)
         self._rm_points = 0
         self._iq_points = 0
+        self._mt5_points = 0
         self.hist_index = {}  # id(signal) -> listbox index
 
         hdr = tk.Label(root, text="🔔 HAMZA SIGNAL BOT", font=("Arial", 20, "bold"),
@@ -78,7 +92,7 @@ class SignalBotGUI:
         srcf = tk.LabelFrame(root, text="Signal Source — signal kahan se aaye", bg="#0a0a14",
                              fg="#00d4aa", font=("Arial", 10, "bold"))
         srcf.pack(fill="x", padx=15, pady=6)
-        self.source_var = ttk.Combobox(srcf, values=["Quotex Feed", "IQ Option Feed", "Real Market Feed"],
+        self.source_var = ttk.Combobox(srcf, values=["Quotex Feed", "IQ Option Feed", "MT5 Feed", "Real Market Feed"],
                                        width=20, state="readonly")
         self.source_var.current(0)
         self.source_var.pack(side="left", padx=8, pady=4)
@@ -99,6 +113,30 @@ class SignalBotGUI:
             root, "Quotex Login — apna Quotex account")
         self.iq_frame, self.iq_email, self.iq_pw = self._login_frame(
             root, "IQ Option Login — apna IQ Option account")
+
+        # ── MT5 ka apna alag login (v1.3): account number + password +
+        # server. Terminal PC par installed hona chahiye; DEMO account
+        # behtar hai. Fields khali chhorho to chal raha terminal jo
+        # account logged-in hai, usi se jud jayega.
+        mf = tk.LabelFrame(root, text="MT5 Login — apna MT5 account (DEMO behtar hai)",
+                           bg="#0a0a14", fg="#00d4aa", font=("Arial", 10, "bold"))
+        mf.pack(fill="x", padx=15, pady=4)
+        self.mt5_frame = mf
+        tk.Label(mf, text="Login #:", bg="#0a0a14", fg="#fff").grid(
+            row=0, column=0, padx=6, pady=3, sticky="w")
+        self.mt5_login = tk.Entry(mf, width=14, bg="#1a1a2e", fg="#fff",
+                                  insertbackground="#fff")
+        self.mt5_login.grid(row=0, column=1, padx=4, pady=3)
+        tk.Label(mf, text="Password:", bg="#0a0a14", fg="#fff").grid(
+            row=0, column=2, padx=6, pady=3, sticky="w")
+        self.mt5_pw = tk.Entry(mf, width=16, show="*", bg="#1a1a2e", fg="#fff",
+                               insertbackground="#fff")
+        self.mt5_pw.grid(row=0, column=3, padx=4, pady=3)
+        tk.Label(mf, text="Server:", bg="#0a0a14", fg="#fff").grid(
+            row=0, column=4, padx=6, pady=3, sticky="w")
+        self.mt5_server = tk.Entry(mf, width=24, bg="#1a1a2e", fg="#fff",
+                                   insertbackground="#fff")
+        self.mt5_server.grid(row=0, column=5, padx=4, pady=3)
 
         # ── Assets + timeframes ───────────────────────────────────────
         af = tk.LabelFrame(root, text="Assets (OTC) — jo pairs dekhne hain", bg="#0a0a14",
@@ -210,10 +248,10 @@ class SignalBotGUI:
         tk.Label(root, text="Signals are not a guarantee of profit. Test on demo first.",
                  bg="#0a0a14", fg="#e94560", font=("Arial", 9, "italic")).pack(pady=4)
 
-        self.log_msg("Signal Bot v1.2 tayyar! Pehle DEMO par test karo. ⚠️")
+        self.log_msg("Signal Bot v1.3 tayyar! Pehle DEMO par test karo. ⚠️")
         self.log_msg("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain.")
-        self.log_msg("Source upar se chuno: Quotex Feed (OTC), IQ Option Feed (login, PRACTICE default) ya Real Market Feed (asal market, login nahi).")
-        self.log_msg("Har platform ka login ALAG hai: Quotex ka apna frame, IQ Option ka apna frame — jo source select hoga, usi ka login chalega.")
+        self.log_msg("Source upar se chuno: Quotex Feed (OTC), IQ Option Feed (login, PRACTICE default), MT5 Feed (PC terminal, DEMO behtar) ya Real Market Feed (asal market, login nahi).")
+        self.log_msg("Har platform ka login ALAG hai: Quotex ka apna frame, IQ Option ka apna frame, MT5 ka apna frame — jo source select hoga, usi ka login chalega.")
         self._apply_source_ui()
 
     # ── login frame builder (har platform ka alag frame) ────────────
@@ -270,26 +308,37 @@ class SignalBotGUI:
             return "realmarket"
         if v.startswith("IQ"):
             return "iqoption"
+        if v.startswith("MT5"):
+            return "mt5"
         return "quotex"
 
     def _apply_source_ui(self):
         src = self.current_source()
         rm = src == "realmarket"
-        # Har platform ka login SIRF apne source par active — doosra band.
+        # Har platform ka login SIRF apne source par active — baqi band.
         self._set_fields("normal" if src == "quotex" else "disabled",
                          self.qx_email, self.qx_pw)
         self._set_fields("normal" if src == "iqoption" else "disabled",
                          self.iq_email, self.iq_pw)
-        self.mode.config(state="disabled" if rm else "readonly")
+        self._set_fields("normal" if src == "mt5" else "disabled",
+                         self.mt5_login, self.mt5_pw, self.mt5_server)
+        # MT5 ka DEMO/REAL account khud tay karta hai — Balance selector
+        # wahan lagu nahi; Real Market par bhi login/mode band hai.
+        self.mode.config(state="disabled" if rm or src == "mt5" else "readonly")
         disp_map = dict(ASSETS)
         for code, cb in self.asset_checks.items():
             cb.config(text=disp_map[code] if src == "quotex"
                       else disp_map[code].replace(" OTC", ""))
         self.assets_frame.config(
             text={"realmarket": "Assets (Real Market) — jo pairs dekhne hain",
-                  "iqoption": "Assets (IQ Option) — jo pairs dekhne hain"}.get(
+                  "iqoption": "Assets (IQ Option) — jo pairs dekhne hain",
+                  "mt5": "Assets (MT5) — jo pairs dekhne hain"}.get(
                       src, "Assets (OTC) — jo pairs dekhne hain"))
-        if src == "realmarket":
+        if src == "mt5":
+            self.source_note.config(
+                text="MT5 terminal (PC par installed) chahiye — DEMO account behtar hai")
+            self.log_msg("MT5 mode: signals tumhare PC ke MT5 terminal ke ticks se ayenge — MT5 Login frame me account number + server likho (terminal pehle se khula/logged-in ho to fields khali bhi chalenge).")
+        elif src == "realmarket":
             self.source_note.config(
                 text="Real Market = asal forex data (Yahoo) — koi login NAHI chahiye")
             self.log_msg("Real Market mode: kisi broker ka login NAHI chahiye — signals asal market data (Yahoo Finance) se ayenge.")
@@ -398,6 +447,14 @@ class SignalBotGUI:
                     "Quotex Login frame me Email aur Password likho!" if src == "quotex"
                     else "IQ Option Login frame me Email aur Password likho!")
                 return
+        if src == "mt5":
+            _login_txt = self.mt5_login.get().strip()
+            if _login_txt and not _login_txt.isdigit():
+                messagebox.showerror("Error", "MT5 Login # sirf number hota hai — sahi account number likho!")
+                return
+            if _login_txt and not self.mt5_server.get().strip():
+                messagebox.showerror("Error", "MT5 Server ka naam likho (MT5 terminal me jo server hai, bilkul waisa)!")
+                return
         assets = [code for code, _ in ASSETS if self.asset_vars[code].get()]
         if not assets:
             messagebox.showerror("Error", "Kam az kam aik asset select karo!")
@@ -453,6 +510,8 @@ class SignalBotGUI:
             self._start_realmarket(assets)
         elif src == "iqoption":
             self._start_iqoption(assets)
+        elif src == "mt5":
+            self._start_mt5(assets)
         else:
             threading.Thread(target=self.run_async_bot, args=(assets,), daemon=True).start()
 
@@ -534,6 +593,47 @@ class SignalBotGUI:
                      f"{'PRACTICE (DEMO)' if practice else 'REAL'} (sirf candles, bot trade nahi lagata).")
         self.set_status("📡 IQ Option: login ho raha hai…")
 
+    # ── MT5 mode (v1.3, EXE only) ─────────────────────────────────────
+
+    def _start_mt5(self, assets):
+        try:
+            import mt5_feed
+            from mt5_feed import Mt5Feed
+        except ImportError as e:
+            self.log_msg(f"❌ MT5 feed load nahi hui: {e}")
+            self.stop_bot()
+            return
+        if not mt5_feed.mt5_available():
+            self.log_msg(mt5_feed.MISSING_PACKAGE_MSG)
+            self.set_status("❌ MT5 package is build me nahi mila")
+            self.stop_bot()
+            return
+        self._mt5_points = 0
+        login_txt = self.mt5_login.get().strip()
+        login_num = int(login_txt) if login_txt.isdigit() else 0
+        pw_txt = self.mt5_pw.get()
+        server_txt = self.mt5_server.get().strip()
+
+        def on_point(code, ts, price):
+            if not self.running or not self.engine:
+                return
+            self._mt5_points += 1
+            if self._mt5_points % 50 == 1:
+                self.set_status(f"✅ MT5 live: ticks chal rahe hain "
+                                f"({self._mt5_points} updates) — perfect candle ka intezar…")
+            try:
+                self.engine.feed(code, {"timestamp": ts, "price": price})
+            except Exception as e:
+                self.log_msg(f"⚠️ Data process error: {e}")
+
+        self.mt5_feed = Mt5Feed(
+            login=login_num, password=pw_txt, server=server_txt,
+            assets=assets, on_point=on_point, on_status=self.log_msg)
+        threading.Thread(target=self.mt5_feed.run, daemon=True,
+                         name="mt5-feed").start()
+        self.log_msg("📡 MT5 feed shuru — PC ke MT5 terminal se ticks ayenge (sirf candles, bot trade nahi lagata).")
+        self.set_status("📡 MT5: terminal se connect ho raha hai…")
+
     def stop_bot(self):
         self.running = False
         if self.feed is not None:
@@ -548,6 +648,12 @@ class SignalBotGUI:
             except Exception:
                 pass
             self.iq_feed = None
+        if self.mt5_feed is not None:
+            try:
+                self.mt5_feed.stop()
+            except Exception:
+                pass
+            self.mt5_feed = None
         self.root.after(0, lambda: self.start_btn.config(state="normal"))
         self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
         self.set_status("")
@@ -628,8 +734,8 @@ class SignalBotGUI:
         self.stop_bot()
 
 
-# ── FUTURE (v2) AUTO-TRADE HOOK ───────────────────────────────────────
-# v1/v1.1/v1.2 are SIGNAL-ONLY by design: the engine emits signals through
+# ── FUTURE AUTO-TRADE HOOK ────────────────────────────────────────────
+# v1/v1.1/v1.2/v1.3 are SIGNAL-ONLY by design: the engine emits signals through
 # SignalBotGUI.on_signal / SignalEngine.on_signal and results are only
 # TRACKED, never traded. A future auto-trade version would subscribe an
 # additional on_signal handler here and call api.buy(...) with the
