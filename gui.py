@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Hamza Signal Bot v1.0 - GUI.
+"""Hamza Signal Bot v1.1 - GUI.
 
-PERFECT-CANDLE SIGNAL bot for Quotex (the "Chinese method"):
+PERFECT-CANDLE SIGNAL bot (the "Chinese method"):
 watches 30-second and 1-minute candles; when a candle closes with its
 body >= threshold % of its range (default 85%), it signals the NEXT
 candle in the same direction (green -> CALL/UP, red -> PUT/DOWN).
+
+v1.1 adds a SIGNAL SOURCE choice:
+  * Quotex Feed    - the v1.0 behaviour (Quotex OTC candles, login).
+  * Real Market Feed - real forex quotes polled over HTTPS from Yahoo
+    Finance (realmarket_feed.py). NO Quotex login needed. Hamza's
+    logic: binary/OTC prices move AFTER the real market, so signals
+    are read where the move starts. Stats are tracked separately per
+    (source, strategy), so demo runs show which feed performs better.
 
 SIGNAL ONLY - this bot places NO trades. It shows a big banner, plays a
 sound and logs the signal; the user places the trade wherever he wants.
@@ -42,18 +50,32 @@ DEFAULT_ASSETS = {"EURUSD", "GBPUSD"}
 class SignalBotGUI:
     def __init__(self, root):
         self.root = root
-        root.title("Hamza Signal Bot v1.0 🔔")
-        root.geometry("740x880")
+        root.title("Hamza Signal Bot v1.1 🔔")
+        root.geometry("740x940")
         root.configure(bg="#0a0a14")
         self.running = False
         self.engine = None
+        self.feed = None       # RealMarketFeed when source = realmarket
+        self._rm_points = 0
         self.hist_index = {}  # id(signal) -> listbox index
 
         hdr = tk.Label(root, text="🔔 HAMZA SIGNAL BOT", font=("Arial", 20, "bold"),
                        bg="#0a0a14", fg="#00d4aa")
         hdr.pack(pady=8)
-        tk.Label(root, text="Perfect Candle Signals (30s / 1m) — Quotex — SIGNAL ONLY, no auto trade",
+        tk.Label(root, text="Perfect Candle Signals (30s / 1m) — SIGNAL ONLY, no auto trade",
                  bg="#0a0a14", fg="#888").pack()
+
+        # ── Signal source ─────────────────────────────────────────────
+        srcf = tk.LabelFrame(root, text="Signal Source — signal kahan se aaye", bg="#0a0a14",
+                             fg="#00d4aa", font=("Arial", 10, "bold"))
+        srcf.pack(fill="x", padx=15, pady=6)
+        self.source_var = ttk.Combobox(srcf, values=["Quotex Feed", "Real Market Feed"],
+                                       width=20, state="readonly")
+        self.source_var.current(0)
+        self.source_var.pack(side="left", padx=8, pady=4)
+        tk.Label(srcf, text="Real Market = asal forex data (Yahoo) — Quotex login NAHI chahiye",
+                 bg="#0a0a14", fg="#888").pack(side="left", padx=4)
+        self.source_var.bind("<<ComboboxSelected>>", lambda e: self._apply_source_ui())
 
         # ── Login ─────────────────────────────────────────────────────
         cf = tk.LabelFrame(root, text="Login", bg="#0a0a14", fg="#00d4aa", font=("Arial", 10, "bold"))
@@ -72,14 +94,18 @@ class SignalBotGUI:
         # ── Assets + timeframes ───────────────────────────────────────
         af = tk.LabelFrame(root, text="Assets (OTC) — jo pairs dekhne hain", bg="#0a0a14",
                            fg="#00d4aa", font=("Arial", 10, "bold"))
+        self.assets_frame = af
         af.pack(fill="x", padx=15, pady=6)
         self.asset_vars = {}
+        self.asset_checks = {}
         for i, (code, disp) in enumerate(ASSETS):
             var = tk.BooleanVar(value=code in DEFAULT_ASSETS)
             self.asset_vars[code] = var
-            tk.Checkbutton(af, text=disp, variable=var, bg="#0a0a14", fg="#fff",
-                           selectcolor="#1a1a2e", activebackground="#0a0a14",
-                           activeforeground="#fff").grid(row=i // 3, column=i % 3, padx=8, pady=2, sticky="w")
+            cb = tk.Checkbutton(af, text=disp, variable=var, bg="#0a0a14", fg="#fff",
+                                selectcolor="#1a1a2e", activebackground="#0a0a14",
+                                activeforeground="#fff")
+            cb.grid(row=i // 3, column=i % 3, padx=8, pady=2, sticky="w")
+            self.asset_checks[code] = cb
         tf_row = tk.Frame(af, bg="#0a0a14")
         tf_row.grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         tk.Label(tf_row, text="Timeframes:", bg="#0a0a14", fg="#fff").pack(side="left")
@@ -175,8 +201,9 @@ class SignalBotGUI:
         tk.Label(root, text="Signals are not a guarantee of profit. Test on demo first.",
                  bg="#0a0a14", fg="#e94560", font=("Arial", 9, "italic")).pack(pady=4)
 
-        self.log_msg("Signal Bot v1.0 tayyar! Pehle DEMO par test karo. ⚠️")
+        self.log_msg("Signal Bot v1.1 tayyar! Pehle DEMO par test karo. ⚠️")
         self.log_msg("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain.")
+        self.log_msg("Source upar se chuno: Quotex Feed (OTC) ya Real Market Feed (asal market, login nahi).")
 
     # ── GUI helpers (thread-safe via after) ───────────────────────────
 
@@ -189,6 +216,30 @@ class SignalBotGUI:
 
     def set_status(self, msg):
         self.root.after(0, lambda: self.status.config(text=msg))
+
+    def set_status_full(self, msg, color="#ffaa00"):
+        self.root.after(0, lambda: self.status.config(text=msg, fg=color))
+
+    # ── signal source UI ──────────────────────────────────────────────
+
+    def current_source(self):
+        return "realmarket" if self.source_var.get().startswith("Real") else "quotex"
+
+    def _apply_source_ui(self):
+        rm = self.current_source() == "realmarket"
+        self.email.config(state="disabled" if rm else "normal")
+        self.pw.config(state="disabled" if rm else "normal")
+        self.mode.config(state="disabled" if rm else "readonly")
+        disp_map = dict(ASSETS)
+        for code, cb in self.asset_checks.items():
+            cb.config(text=disp_map[code].replace(" OTC", "") if rm else disp_map[code])
+        self.assets_frame.config(
+            text="Assets (Real Market) — jo pairs dekhne hain" if rm
+            else "Assets (OTC) — jo pairs dekhne hain")
+        if rm:
+            self.log_msg("Real Market mode: Quotex login ki zaroorat NAHI — signals asal market data (Yahoo Finance) se ayenge.")
+        else:
+            self.log_msg("Quotex mode: signals Quotex OTC candles se ayenge — login lazmi hai.")
 
     def beep(self, kind="signal"):
         if not self.sound_var.get():
@@ -219,7 +270,7 @@ class SignalBotGUI:
     def on_signal(self, sig):
         arrow = "⬆ CALL" if sig.direction == "call" else "⬇ PUT"
         tstr = datetime.fromtimestamp(sig.issued_at).strftime("%H:%M:%S")
-        line = (f"{tstr}  {arrow}  {sig.asset}  {self._tf_label(sig.timeframe)}"
+        line = (f"{tstr}  [{sig.source_label}]  {arrow}  {sig.asset}  {self._tf_label(sig.timeframe)}"
                 f"  [{sig.kind_label}: {sig.detail}]  {self._grade_text(sig)}  → natija pending…")
 
         def _ui():
@@ -228,7 +279,7 @@ class SignalBotGUI:
             self.hist_index[id(sig)] = self.history.size() - 1
             color = "#0f7a3d" if sig.direction == "call" else "#a11"
             self.banner.config(
-                text=f"🔔 {arrow} — {sig.asset} ({self._tf_label(sig.timeframe)}) — {sig.kind_label} — {self._grade_text(sig)} — {tstr}",
+                text=f"🔔 {arrow} — {sig.asset} ({self._tf_label(sig.timeframe)}) — {sig.kind_label} — {self._grade_text(sig)} — {tstr} — {sig.source_label}",
                 bg=color, fg="#fff")
         self.root.after(0, _ui)
         self.beep("signal")
@@ -244,7 +295,7 @@ class SignalBotGUI:
         mark = {"WIN": "✅ WIN", "LOSS": "❌ LOSS", "DRAW": "➖ DRAW"}[sig.result]
         arrow = "⬆ CALL" if sig.direction == "call" else "⬇ PUT"
         tstr = datetime.fromtimestamp(sig.issued_at).strftime("%H:%M:%S")
-        line = (f"{tstr}  {arrow}  {sig.asset}  {self._tf_label(sig.timeframe)}"
+        line = (f"{tstr}  [{sig.source_label}]  {arrow}  {sig.asset}  {self._tf_label(sig.timeframe)}"
                 f"  [{sig.kind_label}: {sig.detail}]  {self._grade_text(sig)}  → {mark}")
         idx = self.hist_index.get(id(sig))
 
@@ -264,18 +315,21 @@ class SignalBotGUI:
         pct = f"{st.win_pct:.0f}%" if st.win_pct is not None else "—"
         self.stats.config(text=f"Signals: {st.total} | WIN: {st.wins} | LOSS: {st.losses} "
                                f"| DRAW: {st.draws} | Win%: {pct}")
-        from signals_engine import KIND_LABELS
+        from signals_engine import KIND_LABELS, SOURCE_LABELS
+        src = self.engine.source
         parts = []
         for kind, label in KIND_LABELS.items():
-            ks = self.engine.stats_by_kind[kind]
+            ks = self.engine.stats_by_source_kind.get((src, kind),
+                                                      self.engine.stats_by_kind[kind])
             kp = f"{ks.win_pct:.0f}%" if ks.win_pct is not None else "—"
             parts.append(f"{label}: {ks.total} signals, W{ks.wins}/L{ks.losses} ({kp})")
-        self.kind_stats.config(text="  •  ".join(parts))
+        self.kind_stats.config(text=f"{SOURCE_LABELS.get(src, src)} — " + "  •  ".join(parts))
 
     # ── start / stop ──────────────────────────────────────────────────
 
     def start_bot(self):
-        if not self.email.get() or not self.pw.get():
+        src = self.current_source()
+        if src == "quotex" and (not self.email.get() or not self.pw.get()):
             messagebox.showerror("Error", "Email aur Password likho!")
             return
         assets = [code for code, _ in ASSETS if self.asset_vars[code].get()]
@@ -300,19 +354,23 @@ class SignalBotGUI:
         except ValueError:
             messagebox.showerror("Error", "Settings ghalat hain: body % 70–95 ke darmiyan, max signals 0 ya zyada.")
             return
-        if self.mode.get().startswith("REAL"):
+        if src == "quotex" and self.mode.get().startswith("REAL"):
             ok = messagebox.askyesno("⚠️ KHATRA!",
                 "REAL account mode!\n\n• Ye sirf SIGNALS dega — trade tum khud lagaoge.\n"
                 "• Asli paisa lagana tumhara apna faisla hai — nuqsan ho sakta hai!\n\nPhir bhi chalana hai?")
             if not ok:
                 return
 
-        asset_map = {code + "_otc": disp for code, disp in ASSETS if code in assets}
+        if src == "realmarket":
+            asset_map = {code: disp.replace(" OTC", "") for code, disp in ASSETS if code in assets}
+        else:
+            asset_map = {code + "_otc": disp for code, disp in ASSETS if code in assets}
         self.engine = SignalEngine(asset_map, tfs, threshold_pct=threshold,
                                    strategies=strategies,
                                    trend_filter=self.trend_var.get(),
                                    rsi_filter=self.rsi_var.get(),
                                    max_signals=max_sig,
+                                   source=src,
                                    on_signal=self.on_signal, on_result=self.on_result,
                                    on_blocked=self.on_blocked)
         self.log_msg(f"Strategies: {', '.join(strategies)} | Trend filter: "
@@ -324,10 +382,64 @@ class SignalBotGUI:
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.banner.config(text="— signal ka intezar… —", bg="#1a1a2e", fg="#888")
-        threading.Thread(target=self.run_async_bot, args=(assets,), daemon=True).start()
+        if src == "realmarket":
+            self._start_realmarket(assets)
+        else:
+            threading.Thread(target=self.run_async_bot, args=(assets,), daemon=True).start()
+
+    # ── Real Market mode ──────────────────────────────────────────────
+
+    def _start_realmarket(self, assets):
+        try:
+            from realmarket_feed import RealMarketFeed
+        except ImportError as e:
+            self.log_msg(f"❌ Real Market feed load nahi hui: {e}")
+            self.stop_bot()
+            return
+        self._rm_points = 0
+
+        def on_point(code, ts, price):
+            if not self.running or not self.engine:
+                return
+            self._rm_points += 1
+            try:
+                self.engine.feed(code, {"timestamp": ts, "price": price})
+            except Exception as e:
+                self.log_msg(f"⚠️ Data process error: {e}")
+
+        self.feed = RealMarketFeed(assets, on_point=on_point, on_status=self.log_msg)
+        self.feed.start()
+        self.log_msg("📡 Real Market (Yahoo Finance) polling shuru — koi login nahi, koi account nahi, sirf signals.")
+        self.set_status("📡 Real Market: pehle data ka intezar…")
+        self._rm_status_tick()
+
+    def _rm_status_tick(self):
+        if not self.running or self.feed is None:
+            return
+        feed = self.feed
+        if feed.last_poll is None:
+            self.set_status_full("📡 Real Market: pehle data ka intezar…")
+        elif feed.is_stale(10):
+            tstr = datetime.fromtimestamp(feed.last_poll).strftime("%H:%M:%S")
+            self.set_status_full(
+                f"⚠️ STALE — Real Market data ruk gaya hai! Last update {tstr} — connection check karo",
+                color="#e94560")
+        else:
+            tstr = datetime.fromtimestamp(feed.last_poll).strftime("%H:%M:%S")
+            lag = feed.data_lag()
+            lag_txt = f" • data lag ~{lag:.0f}s" if lag is not None else ""
+            self.set_status_full(
+                f"📡 Real Market (Yahoo) • last update {tstr}{lag_txt} • {self._rm_points} points — perfect candle ka intezar…")
+        self.root.after(2000, self._rm_status_tick)
 
     def stop_bot(self):
         self.running = False
+        if self.feed is not None:
+            try:
+                self.feed.stop()
+            except Exception:
+                pass
+            self.feed = None
         self.root.after(0, lambda: self.start_btn.config(state="normal"))
         self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
         self.set_status("")
@@ -409,7 +521,7 @@ class SignalBotGUI:
 
 
 # ── FUTURE (v2) AUTO-TRADE HOOK ───────────────────────────────────────
-# v1 is SIGNAL-ONLY by design: the engine emits signals through
+# v1/v1.1 are SIGNAL-ONLY by design: the engine emits signals through
 # SignalBotGUI.on_signal / SignalEngine.on_signal and results are only
 # TRACKED, never traded. A future auto-trade version would subscribe an
 # additional on_signal handler here and call api.buy(...) with the
