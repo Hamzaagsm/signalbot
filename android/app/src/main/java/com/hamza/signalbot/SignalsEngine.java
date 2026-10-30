@@ -41,7 +41,7 @@ import java.util.Set;
  * compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall,
  * per strategy kind, AND per (source, kind) — v1.1 adds a feed "source"
  * stamp ("quotex" vs "realmarket") so the demo record can show which
- * feed actually performs better.
+ * feed actually performs better; v1.2 adds "iqoption" the same way.
  *
  * NO orders are placed anywhere — the bot is signal-only by design.
  *
@@ -64,6 +64,7 @@ public class SignalsEngine {
     static {
         SOURCE_LABELS.put("quotex", "Quotex");
         SOURCE_LABELS.put("realmarket", "Real Market");
+        SOURCE_LABELS.put("iqoption", "IQ Option");
     }
 
     // ── data classes ──────────────────────────────────────────────────
