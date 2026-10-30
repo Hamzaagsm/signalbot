@@ -1,0 +1,35 @@
+name: Build Signal Bot APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/build-apk.yml']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Accept licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+      - name: Run unit tests
+        run: |
+          cd android
+          gradle :app:testDebugUnitTest --no-daemon
+      - name: Build release APK
+        run: |
+          cd android
+          gradle assembleRelease --no-daemon -x lint
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk HamzaSignalBot.apk
+          ls -la HamzaSignalBot.apk
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HamzaSignalBot-apk
+          path: HamzaSignalBot.apk
