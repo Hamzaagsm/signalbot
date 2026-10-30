@@ -4,3 +4,8 @@ pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 curl-cffi>=0.7.3
+# v1.3 MT5 feed (EXE only): official MetaTrader5 package. It is
+# Windows-only (talks to the locally installed MT5 terminal); CI
+# builds on Windows so it installs and bundles there. mt5_feed.py
+# imports it guarded, so dev machines without it still run.
+MetaTrader5
