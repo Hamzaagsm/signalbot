@@ -24,6 +24,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * polling via RealMarketFeed — NO Quotex login at all; the same engine
  * gets the points, stamped source="realmarket". The engine builds BOTH
  * the 30s and the 1m candles from the same tick stream, like the EXE.
+ *
+ * v1.2 adds the IQ Option source: IqOptionFeed logs in with the user's
+ * own IQ Option account (PRACTICE by default) and streams its candles
+ * into the same engine, stamped source="iqoption" — Hamza's rule: the
+ * bot works for IQ Option AND Quotex, not Quotex only.
  */
 public class SignalBotEngine {
 
@@ -31,7 +36,8 @@ public class SignalBotEngine {
         public Context context;
         public String email, password;
         public boolean isDemo = true;
-        /** "quotex" (default, v1.0 behaviour) or "realmarket" (v1.1). */
+        /** "quotex" (default, v1.0 behaviour), "realmarket" (v1.1)
+         *  or "iqoption" (v1.2 — email/password = IQ Option account). */
         public String source = "quotex";
         /** asset_key -> display name, in selection order. */
         public LinkedHashMap<String, String> assetMap = new LinkedHashMap<>();
@@ -61,6 +67,7 @@ public class SignalBotEngine {
     private Thread worker;
     private SignalsEngine engine;
     private RealMarketFeed feed;
+    private IqOptionFeed iqFeed;
     private final AtomicLong points = new AtomicLong();
 
     public SignalBotEngine(Config cfg, Ui ui) {
@@ -80,8 +87,9 @@ public class SignalBotEngine {
     public synchronized void stop() {
         running = false;
         if (feed != null) feed.stop();
+        if (iqFeed != null) iqFeed.stop();
         if (worker != null) worker.interrupt();
-        if (!"realmarket".equals(cfg.source)) {
+        if ("quotex".equals(cfg.source)) {
             for (String key : cfg.assetMap.keySet()) client.unfollowDepth(key);
             client.disconnect();
         }
@@ -95,6 +103,10 @@ public class SignalBotEngine {
     private void loop() {
         if ("realmarket".equals(cfg.source)) {
             loopRealMarket();
+            return;
+        }
+        if ("iqoption".equals(cfg.source)) {
+            loopIqOption();
             return;
         }
         try {
@@ -165,6 +177,65 @@ public class SignalBotEngine {
                         + " updates) — perfect candle ka intezar…");
             }
         } catch (Exception ignored) {}
+    }
+
+    // ── IQ Option mode (v1.2) ─────────────────────────────────────
+
+    private void loopIqOption() {
+        try {
+            engine = new SignalsEngine(cfg.assetMap, cfg.timeframes, cfg.thresholdPct,
+                    cfg.strategies, cfg.trendFilter, cfg.rsiFilter, cfg.maxSignals,
+                    "iqoption");
+            engine.onSignal = s -> { ui.signal(s); ui.stats(engine); };
+            engine.onResult = s -> { ui.result(s); ui.stats(engine); };
+            engine.onBlocked = (kind, dir, why) -> ui.blocked(kind, dir, why);
+
+            iqFeed = new IqOptionFeed(cfg.email, cfg.password,
+                    new ArrayList<>(cfg.assetMap.keySet()), cfg.isDemo,
+                    (code, point) -> {
+                        if (!running || engine == null) return;
+                        try {
+                            long n;
+                            synchronized (engine) {
+                                engine.feed(code, point);
+                                n = points.incrementAndGet();
+                            }
+                            if (n % 50 == 1) {
+                                ui.status("✅ IQ Option live: stream chal raha hai (" + n
+                                        + " updates) — perfect candle ka intezar…");
+                            }
+                        } catch (Exception e) {
+                            ui.log("⚠️ Data process error: " + e.getMessage());
+                        }
+                    },
+                    text -> ui.log(text),
+                    (practiceBal, realBal) -> {
+                        if (practiceBal != null && realBal != null)
+                            ui.balances(practiceBal, realBal);
+                    });
+
+            ui.status("📡 IQ Option: login ho raha hai…");
+            ui.log("Note: Trend/RSI ko candles ki history chahiye — IQ history (warmup) pehle aati hai, phir live candles.");
+            iqFeed.run();   // blocks until stop() / fatal login error
+            ui.log("Session khatam.");
+        } catch (Exception e) {
+            ui.log("❌ Fatal: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        } finally {
+            running = false;
+            if (iqFeed != null) iqFeed.stop();
+            ui.finished(sessionSummary());
+        }
+    }
+
+    private String sessionSummary() {
+        SignalsEngine e = engine;
+        if (e == null) return "Session khatam (engine start nahi hua).";
+        SignalsEngine.Stats st = e.stats;
+        Double wp = st.winPct();
+        return String.format(Locale.US,
+                "Session khatam: %d signals | WIN %d | LOSS %d | DRAW %d | Win%% %s",
+                st.total, st.wins, st.losses, st.draws,
+                wp == null ? "—" : String.format(Locale.US, "%.0f%%", wp));
     }
 
     // ── Real Market mode (v1.1) ───────────────────────────────────────
