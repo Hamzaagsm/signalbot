@@ -30,6 +30,7 @@ public class SignalsEngineTest {
         final List<SignalsEngine.Signal> sigs = new ArrayList<>();
         final List<SignalsEngine.Signal> res = new ArrayList<>();
         final List<String[]> blocked = new ArrayList<>();
+        final List<SignalsEngine.Candle> candles = new ArrayList<>();
     }
 
     static Harness makeEngine(Set<String> strategies, List<Integer> tfs, double threshold,
@@ -47,6 +48,29 @@ public class SignalsEngineTest {
 
     static Harness makeEngine() throws Exception {
         return makeEngine(strat("perfect"), tfs(60), 85.0, false, false, 0);
+    }
+
+    /** v1.1: engine with an explicit feed source stamp + assets map. */
+    static Harness makeEngineSource(Set<String> strategies, List<Integer> tfs, double threshold,
+                                    boolean trendFilter, boolean rsiFilter, int maxSignals,
+                                    String source, Map<String, String> assets) throws Exception {
+        Harness h = new Harness();
+        h.eng = new SignalsEngine(assets, tfs, threshold, strategies,
+                trendFilter, rsiFilter, 70.0, 30.0, maxSignals, source);
+        h.eng.onSignal = s -> h.sigs.add(s);
+        h.eng.onResult = s -> h.res.add(s);
+        h.eng.onBlocked = (k, d, w) -> h.blocked.add(new String[]{k, d, w});
+        h.eng.onCandle = (k, t, c) -> h.candles.add(c);
+        return h;
+    }
+
+    /** tick() without the checked exception, for use inside feed lambdas. */
+    static JSONObject tickQ(long ts, double price) {
+        try {
+            return tick(ts, price);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     static Set<String> strat(String... kinds) throws Exception {
@@ -352,5 +376,154 @@ public class SignalsEngineTest {
         List<SignalsEngine.Point> np = SignalsEngine.extractPoints(nested);
         assertEquals(1, np.size());
         assertEquals(2.0, np.get(0).ohlc.high, 1e-12);
+    }
+
+    // ── v1.1 REAL MARKET FEED (Python test_signals.py ka mirror) ─────
+
+    @Test public void yahooSymbolMappingAllPairs() throws Exception {
+        String[] codes = {"EURUSD", "GBPUSD", "USDJPY", "EURGBP", "AUDUSD", "EURJPY"};
+        String[] want = {"EURUSD=X", "GBPUSD=X", "USDJPY=X", "EURGBP=X", "AUDUSD=X", "EURJPY=X"};
+        for (int i = 0; i < codes.length; i++)
+            assertEquals(want[i], RealMarketFeed.yahooSymbol(codes[i]));
+    }
+
+    static JSONObject chartPayload(double price, long mtime) throws Exception {
+        JSONObject meta = new JSONObject();
+        meta.put("regularMarketPrice", price);
+        meta.put("regularMarketTime", mtime);
+        JSONObject first = new JSONObject();
+        first.put("meta", meta);
+        JSONArray result = new JSONArray();
+        result.put(first);
+        JSONObject chart = new JSONObject();
+        chart.put("result", result);
+        JSONObject payload = new JSONObject();
+        payload.put("chart", chart);
+        return payload;
+    }
+
+    @Test public void chartPayloadParsed() throws Exception {
+        RealMarketFeed.Quote q = RealMarketFeed.parseChartPayload(chartPayload(1.1193, 1793334045L));
+        assertTrue(q != null);
+        assertEquals(1.1193, q.price, 1e-12);
+        assertEquals(1793334045L, q.marketTs);
+    }
+
+    @Test public void chartErrorPayloadsRejected() throws Exception {
+        JSONObject finance = new JSONObject();
+        finance.put("result", JSONObject.NULL);
+        JSONObject err = new JSONObject();
+        err.put("code", "Unauthorized");
+        finance.put("error", err);
+        JSONObject financePayload = new JSONObject();
+        financePayload.put("finance", finance);
+        assertNull(RealMarketFeed.parseChartPayload(financePayload));
+
+        JSONObject chartNull = new JSONObject();
+        chartNull.put("result", JSONObject.NULL);
+        JSONObject chartPayloadNull = new JSONObject();
+        chartPayloadNull.put("chart", chartNull);
+        assertNull(RealMarketFeed.parseChartPayload(chartPayloadNull));
+
+        assertNull(RealMarketFeed.parseChartPayload(chartPayload(0, 1793334045L)));
+        assertNull(RealMarketFeed.parseChartPayload(null));
+    }
+
+    // staleness flag logic (no network: quotes injected via handleQuote)
+    @Test public void feedStaleBeforeAnyPoll() throws Exception {
+        RealMarketFeed feed = new RealMarketFeed(
+                Arrays.asList("EURUSD"), (c, t, p) -> {}, null);
+        assertTrue(feed.isStale(10.0, 1793334000.0));
+    }
+
+    @Test public void feedFreshThenStaleAndLag() throws Exception {
+        RealMarketFeed feed = new RealMarketFeed(
+                Arrays.asList("EURUSD"), (c, t, p) -> {}, null);
+        double now = 1793334000.0;
+        feed.handleQuote("EURUSD", 1.1193, 1793333995L, now);
+        assertTrue(!feed.isStale(10.0, now + 5));
+        assertTrue(feed.isStale(10.0, now + 11));
+        assertEquals(5.0, feed.dataLag(now), 1e-9);
+    }
+
+    // duplicate quotes are not re-emitted (polling the same snapshot twice)
+    @Test public void unchangedQuoteDeduplicated() throws Exception {
+        final List<Double> pts = new ArrayList<>();
+        RealMarketFeed feed = new RealMarketFeed(
+                Arrays.asList("EURUSD"), (c, t, p) -> pts.add(p), null);
+        feed.handleQuote("EURUSD", 1.1000, 1793334000L, 1793334001.0);
+        feed.handleQuote("EURUSD", 1.1000, 1793334000L, 1793334002.0);
+        feed.handleQuote("EURUSD", 1.1001, 1793334003L, 1793334004.0);
+        assertEquals(2, pts.size());
+        assertEquals(1.1001, pts.get(1), 1e-12);
+    }
+
+    // points -> engine candles: same aggregation path as the Quotex feed,
+    // driven through RealMarketFeed.handleQuote exactly like the UI does
+    @Test public void rmPointsAggregateStampAndStats() throws Exception {
+        Map<String, String> assets = new LinkedHashMap<>();
+        assets.put("USDJPY", "USD/JPY");
+        final Harness h = makeEngineSource(strat("perfect"), tfs(30), 85.0, false, false, 0,
+                "realmarket", assets);
+        RealMarketFeed feed = new RealMarketFeed(Arrays.asList("USDJPY"),
+                (code, ts, p) -> h.eng.feed(code, tickQ(ts, p)), null);
+        long[][] pts = {{B, 0}, {B + 5, 0}, {B + 10, 0}, {B + 20, 0}, {B + 29, 0},
+                {B + 30, 0}, {B + 35, 0}, {B + 59, 0}, {B + 60, 0}};
+        double[] prices = {100.00, 100.10, 100.20, 100.28, 100.30,
+                100.30, 100.40, 100.45, 100.45};
+        for (int i = 0; i < pts.length; i++)
+            feed.handleQuote("USDJPY", prices[i], pts[i][0], (double) pts[i][0]);
+
+        SignalsEngine.Candle c0 = h.candles.get(0);
+        assertEquals(100.00, c0.open, 1e-9);
+        assertEquals(100.30, c0.high, 1e-9);
+        assertEquals(100.00, c0.low, 1e-9);
+        assertEquals(100.30, c0.close, 1e-9);
+
+        assertEquals(2, h.sigs.size());   // target candle is itself 100%-body
+        for (SignalsEngine.Signal s : h.sigs) assertEquals("call", s.direction);
+        assertEquals("realmarket", h.sigs.get(0).source);
+        assertEquals("Real Market", h.sigs.get(0).sourceLabel());
+
+        assertEquals(1, h.res.size());
+        assertEquals("WIN", h.res.get(0).result);
+
+        SignalsEngine.Stats rmStats = h.eng.statsFor("realmarket", "perfect");
+        assertTrue(rmStats != null);
+        assertEquals(1, rmStats.wins);
+        assertEquals(1, rmStats.total);
+        SignalsEngine.Stats qxStats = h.eng.statsFor("quotex", "perfect");
+        assertTrue(qxStats == null || qxStats.total == 0);
+    }
+
+    // default source stays "quotex" (v1.0 behaviour unchanged)
+    @Test public void defaultEngineStampsQuotexSource() throws Exception {
+        Harness h = makeEngine();
+        feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
+        feedCandle(h.eng, B + 60, 1.00095, 1.00150, 1.00090, 1.00120);
+        assertEquals("quotex", h.sigs.get(0).source);
+        assertEquals("Quotex", h.sigs.get(0).sourceLabel());
+        assertEquals(1, h.eng.statsFor("quotex", "perfect").wins);
+    }
+
+    // per-source stats isolation: same winning pattern, two engines,
+    // each records ONLY under its own source stamp
+    @Test public void perSourceStatsIsolation() throws Exception {
+        Map<String, String> assets = new LinkedHashMap<>();
+        assets.put("EURUSD_otc", "EUR/USD OTC");
+        Harness qx = makeEngineSource(strat("perfect"), tfs(60), 85.0, false, false, 0,
+                "quotex", assets);
+        Harness rm = makeEngineSource(strat("perfect"), tfs(60), 85.0, false, false, 0,
+                "realmarket", assets);
+        for (Harness h : new Harness[]{qx, rm}) {
+            feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
+            feedCandle(h.eng, B + 60, 1.00095, 1.00150, 1.00090, 1.00120);
+        }
+        assertEquals(1, qx.eng.statsFor("quotex", "perfect").wins);
+        SignalsEngine.Stats qxOther = qx.eng.statsFor("realmarket", "perfect");
+        assertTrue(qxOther == null || qxOther.total == 0);
+        assertEquals(1, rm.eng.statsFor("realmarket", "perfect").wins);
+        SignalsEngine.Stats rmOther = rm.eng.statsFor("quotex", "perfect");
+        assertTrue(rmOther == null || rmOther.total == 0);
     }
 }
