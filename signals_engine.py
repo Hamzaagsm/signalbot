@@ -25,7 +25,8 @@ Results: after the signalled next candle closes, its direction is
 compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall,
 per strategy kind, AND per (source, kind) — v1.1 adds a feed "source"
 stamp ("quotex" vs "realmarket") so the demo record can show which
-feed actually performs better; v1.2 adds "iqoption" the same way.
+feed actually performs better; v1.2 adds "iqoption" the same way;
+v1.3 adds "mt5" (MetaTrader 5 terminal ticks, EXE only).
 
 Everything here is pure Python (offline-testable, see test_signals.py).
 NO orders are placed anywhere - v1 is a signal-only bot by design.
@@ -41,7 +42,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 KIND_LABELS = {"perfect": "Perfect Candle", "engulfing": "Engulfing", "pinbar": "Pin Bar"}
-SOURCE_LABELS = {"quotex": "Quotex", "realmarket": "Real Market", "iqoption": "IQ Option"}
+SOURCE_LABELS = {"quotex": "Quotex", "realmarket": "Real Market", "iqoption": "IQ Option",
+                 "mt5": "MT5"}
 
 
 # ── data classes ──────────────────────────────────────────────────────
