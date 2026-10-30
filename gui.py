@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Hamza Signal Bot v1.1 - GUI.
+"""Hamza Signal Bot v1.2 - GUI.
 
 PERFECT-CANDLE SIGNAL bot (the "Chinese method"):
 watches 30-second and 1-minute candles; when a candle closes with its
 body >= threshold % of its range (default 85%), it signals the NEXT
 candle in the same direction (green -> CALL/UP, red -> PUT/DOWN).
 
-v1.1 adds a SIGNAL SOURCE choice:
+v1.1 added a SIGNAL SOURCE choice:
   * Quotex Feed    - the v1.0 behaviour (Quotex OTC candles, login).
   * Real Market Feed - real forex quotes polled over HTTPS from Yahoo
     Finance (realmarket_feed.py). NO Quotex login needed. Hamza's
     logic: binary/OTC prices move AFTER the real market, so signals
     are read where the move starts. Stats are tracked separately per
     (source, strategy), so demo runs show which feed performs better.
+
+v1.2 adds a third source (Hamza: "bot IQ Option aur Quotex aur baqi
+binary options par work kare, sirf Quotex nahi"):
+  * IQ Option Feed - IQ Option login (iqoption_feed.py); PRACTICE
+    balance by default; regular pairs in market hours, OTC pairs
+    when the forex market is closed. Same engine, source stamp
+    "iqoption", stats kept separately again.
 
 SIGNAL ONLY - this bot places NO trades. It shows a big banner, plays a
 sound and logs the signal; the user places the trade wherever he wants.
@@ -50,13 +57,15 @@ DEFAULT_ASSETS = {"EURUSD", "GBPUSD"}
 class SignalBotGUI:
     def __init__(self, root):
         self.root = root
-        root.title("Hamza Signal Bot v1.1 🔔")
+        root.title("Hamza Signal Bot v1.2 🔔")
         root.geometry("740x940")
         root.configure(bg="#0a0a14")
         self.running = False
         self.engine = None
         self.feed = None       # RealMarketFeed when source = realmarket
+        self.iq_feed = None    # IqOptionFeed when source = iqoption
         self._rm_points = 0
+        self._iq_points = 0
         self.hist_index = {}  # id(signal) -> listbox index
 
         hdr = tk.Label(root, text="🔔 HAMZA SIGNAL BOT", font=("Arial", 20, "bold"),
@@ -69,12 +78,13 @@ class SignalBotGUI:
         srcf = tk.LabelFrame(root, text="Signal Source — signal kahan se aaye", bg="#0a0a14",
                              fg="#00d4aa", font=("Arial", 10, "bold"))
         srcf.pack(fill="x", padx=15, pady=6)
-        self.source_var = ttk.Combobox(srcf, values=["Quotex Feed", "Real Market Feed"],
+        self.source_var = ttk.Combobox(srcf, values=["Quotex Feed", "IQ Option Feed", "Real Market Feed"],
                                        width=20, state="readonly")
         self.source_var.current(0)
         self.source_var.pack(side="left", padx=8, pady=4)
-        tk.Label(srcf, text="Real Market = asal forex data (Yahoo) — Quotex login NAHI chahiye",
-                 bg="#0a0a14", fg="#888").pack(side="left", padx=4)
+        self.source_note = tk.Label(srcf, text="Quotex login chahiye — signals Quotex OTC candles se",
+                                    bg="#0a0a14", fg="#888")
+        self.source_note.pack(side="left", padx=4)
         self.source_var.bind("<<ComboboxSelected>>", lambda e: self._apply_source_ui())
 
         # ── Login ─────────────────────────────────────────────────────
@@ -201,9 +211,9 @@ class SignalBotGUI:
         tk.Label(root, text="Signals are not a guarantee of profit. Test on demo first.",
                  bg="#0a0a14", fg="#e94560", font=("Arial", 9, "italic")).pack(pady=4)
 
-        self.log_msg("Signal Bot v1.1 tayyar! Pehle DEMO par test karo. ⚠️")
+        self.log_msg("Signal Bot v1.2 tayyar! Pehle DEMO par test karo. ⚠️")
         self.log_msg("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain.")
-        self.log_msg("Source upar se chuno: Quotex Feed (OTC) ya Real Market Feed (asal market, login nahi).")
+        self.log_msg("Source upar se chuno: Quotex Feed (OTC), IQ Option Feed (login, PRACTICE default) ya Real Market Feed (asal market, login nahi).")
 
     # ── GUI helpers (thread-safe via after) ───────────────────────────
 
@@ -223,22 +233,38 @@ class SignalBotGUI:
     # ── signal source UI ──────────────────────────────────────────────
 
     def current_source(self):
-        return "realmarket" if self.source_var.get().startswith("Real") else "quotex"
+        v = self.source_var.get()
+        if v.startswith("Real"):
+            return "realmarket"
+        if v.startswith("IQ"):
+            return "iqoption"
+        return "quotex"
 
     def _apply_source_ui(self):
-        rm = self.current_source() == "realmarket"
+        src = self.current_source()
+        rm = src == "realmarket"
         self.email.config(state="disabled" if rm else "normal")
         self.pw.config(state="disabled" if rm else "normal")
         self.mode.config(state="disabled" if rm else "readonly")
         disp_map = dict(ASSETS)
         for code, cb in self.asset_checks.items():
-            cb.config(text=disp_map[code].replace(" OTC", "") if rm else disp_map[code])
+            cb.config(text=disp_map[code] if src == "quotex"
+                      else disp_map[code].replace(" OTC", ""))
         self.assets_frame.config(
-            text="Assets (Real Market) — jo pairs dekhne hain" if rm
-            else "Assets (OTC) — jo pairs dekhne hain")
-        if rm:
-            self.log_msg("Real Market mode: Quotex login ki zaroorat NAHI — signals asal market data (Yahoo Finance) se ayenge.")
+            text={"realmarket": "Assets (Real Market) — jo pairs dekhne hain",
+                  "iqoption": "Assets (IQ Option) — jo pairs dekhne hain"}.get(
+                      src, "Assets (OTC) — jo pairs dekhne hain"))
+        if src == "realmarket":
+            self.source_note.config(
+                text="Real Market = asal forex data (Yahoo) — koi login NAHI chahiye")
+            self.log_msg("Real Market mode: kisi broker ka login NAHI chahiye — signals asal market data (Yahoo Finance) se ayenge.")
+        elif src == "iqoption":
+            self.source_note.config(
+                text="IQ Option login chahiye — Balance DEMO = IQ ka PRACTICE account")
+            self.log_msg("IQ Option mode: signals IQ Option candles se ayenge — IQ Option wala email/password likho, Balance DEMO (PRACTICE) rakho.")
         else:
+            self.source_note.config(
+                text="Quotex login chahiye — signals Quotex OTC candles se")
             self.log_msg("Quotex mode: signals Quotex OTC candles se ayenge — login lazmi hai.")
 
     def beep(self, kind="signal"):
@@ -329,7 +355,7 @@ class SignalBotGUI:
 
     def start_bot(self):
         src = self.current_source()
-        if src == "quotex" and (not self.email.get() or not self.pw.get()):
+        if src in ("quotex", "iqoption") and (not self.email.get() or not self.pw.get()):
             messagebox.showerror("Error", "Email aur Password likho!")
             return
         assets = [code for code, _ in ASSETS if self.asset_vars[code].get()]
@@ -354,17 +380,18 @@ class SignalBotGUI:
         except ValueError:
             messagebox.showerror("Error", "Settings ghalat hain: body % 70–95 ke darmiyan, max signals 0 ya zyada.")
             return
-        if src == "quotex" and self.mode.get().startswith("REAL"):
+        if src in ("quotex", "iqoption") and self.mode.get().startswith("REAL"):
             ok = messagebox.askyesno("⚠️ KHATRA!",
                 "REAL account mode!\n\n• Ye sirf SIGNALS dega — trade tum khud lagaoge.\n"
                 "• Asli paisa lagana tumhara apna faisla hai — nuqsan ho sakta hai!\n\nPhir bhi chalana hai?")
             if not ok:
                 return
 
-        if src == "realmarket":
-            asset_map = {code: disp.replace(" OTC", "") for code, disp in ASSETS if code in assets}
-        else:
+        if src == "quotex":
             asset_map = {code + "_otc": disp for code, disp in ASSETS if code in assets}
+        else:
+            # realmarket + iqoption: plain codes, display without " OTC"
+            asset_map = {code: disp.replace(" OTC", "") for code, disp in ASSETS if code in assets}
         self.engine = SignalEngine(asset_map, tfs, threshold_pct=threshold,
                                    strategies=strategies,
                                    trend_filter=self.trend_var.get(),
@@ -384,6 +411,8 @@ class SignalBotGUI:
         self.banner.config(text="— signal ka intezar… —", bg="#1a1a2e", fg="#888")
         if src == "realmarket":
             self._start_realmarket(assets)
+        elif src == "iqoption":
+            self._start_iqoption(assets)
         else:
             threading.Thread(target=self.run_async_bot, args=(assets,), daemon=True).start()
 
@@ -432,6 +461,39 @@ class SignalBotGUI:
                 f"📡 Real Market (Yahoo) • last update {tstr}{lag_txt} • {self._rm_points} points — perfect candle ka intezar…")
         self.root.after(2000, self._rm_status_tick)
 
+    # ── IQ Option mode (v1.2) ─────────────────────────────────────────
+
+    def _start_iqoption(self, assets):
+        try:
+            from iqoption_feed import IqOptionFeed
+        except ImportError as e:
+            self.log_msg(f"❌ IQ Option feed load nahi hui: {e}")
+            self.stop_bot()
+            return
+        self._iq_points = 0
+        practice = self.mode.get() == "DEMO"
+
+        def on_candle(code, point):
+            if not self.running or not self.engine:
+                return
+            self._iq_points += 1
+            if self._iq_points % 50 == 1:
+                self.set_status(f"✅ IQ Option live: stream chal raha hai "
+                                f"({self._iq_points} updates) — perfect candle ka intezar…")
+            try:
+                self.engine.feed(code, point)
+            except Exception as e:
+                self.log_msg(f"⚠️ Data process error: {e}")
+
+        self.iq_feed = IqOptionFeed(
+            self.email.get(), self.pw.get(), assets, practice=practice,
+            on_candle=on_candle, on_status=self.log_msg)
+        threading.Thread(target=self.iq_feed.run, daemon=True,
+                         name="iq-feed").start()
+        self.log_msg(f"📡 IQ Option feed shuru — mode: "
+                     f"{'PRACTICE (DEMO)' if practice else 'REAL'} (sirf candles, bot trade nahi lagata).")
+        self.set_status("📡 IQ Option: login ho raha hai…")
+
     def stop_bot(self):
         self.running = False
         if self.feed is not None:
@@ -440,6 +502,12 @@ class SignalBotGUI:
             except Exception:
                 pass
             self.feed = None
+        if self.iq_feed is not None:
+            try:
+                self.iq_feed.stop()
+            except Exception:
+                pass
+            self.iq_feed = None
         self.root.after(0, lambda: self.start_btn.config(state="normal"))
         self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
         self.set_status("")
@@ -521,7 +589,7 @@ class SignalBotGUI:
 
 
 # ── FUTURE (v2) AUTO-TRADE HOOK ───────────────────────────────────────
-# v1/v1.1 are SIGNAL-ONLY by design: the engine emits signals through
+# v1/v1.1/v1.2 are SIGNAL-ONLY by design: the engine emits signals through
 # SignalBotGUI.on_signal / SignalEngine.on_signal and results are only
 # TRACKED, never traded. A future auto-trade version would subscribe an
 # additional on_signal handler here and call api.buy(...) with the
