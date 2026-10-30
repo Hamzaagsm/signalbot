@@ -65,6 +65,14 @@ public class BotSettings {
         return m;
     }
 
+    /** Real Market mode: plain asset code -> display without " OTC" (EXE v1.1 jaisa). */
+    public java.util.LinkedHashMap<String, String> assetMapRealMarket() {
+        java.util.LinkedHashMap<String, String> m = new java.util.LinkedHashMap<>();
+        for (String[] a : ASSETS)
+            if (assetCodes.contains(a[0])) m.put(a[0], a[1].replace(" OTC", ""));
+        return m;
+    }
+
     public static BotSettings load(Context ctx) {
         SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         BotSettings s = new BotSettings();
