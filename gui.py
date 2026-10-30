@@ -58,7 +58,7 @@ class SignalBotGUI:
     def __init__(self, root):
         self.root = root
         root.title("Hamza Signal Bot v1.2 🔔")
-        root.geometry("740x940")
+        root.geometry("740x1000")
         root.configure(bg="#0a0a14")
         self.running = False
         self.engine = None
@@ -86,20 +86,19 @@ class SignalBotGUI:
                                     bg="#0a0a14", fg="#888")
         self.source_note.pack(side="left", padx=4)
         self.source_var.bind("<<ComboboxSelected>>", lambda e: self._apply_source_ui())
-
-        # ── Login ─────────────────────────────────────────────────────
-        cf = tk.LabelFrame(root, text="Login", bg="#0a0a14", fg="#00d4aa", font=("Arial", 10, "bold"))
-        cf.pack(fill="x", padx=15, pady=6)
-        tk.Label(cf, text="Email:", bg="#0a0a14", fg="#fff").grid(row=0, column=0, padx=8, pady=4, sticky="w")
-        self.email = tk.Entry(cf, width=35, bg="#1a1a2e", fg="#fff", insertbackground="#fff")
-        self.email.grid(row=0, column=1, padx=8, pady=4)
-        tk.Label(cf, text="Password:", bg="#0a0a14", fg="#fff").grid(row=1, column=0, padx=8, pady=4, sticky="w")
-        self.pw = tk.Entry(cf, width=35, show="*", bg="#1a1a2e", fg="#fff", insertbackground="#fff")
-        self.pw.grid(row=1, column=1, padx=8, pady=4)
-        tk.Label(cf, text="Balance:", bg="#0a0a14", fg="#fff").grid(row=0, column=2, padx=8, pady=4, sticky="w")
-        self.mode = ttk.Combobox(cf, values=["DEMO", "REAL (Asli paisa!)"], width=16, state="readonly")
+        tk.Label(srcf, text="Balance:", bg="#0a0a14", fg="#fff").pack(side="left", padx=(12, 2))
+        self.mode = ttk.Combobox(srcf, values=["DEMO", "REAL (Asli paisa!)"], width=16, state="readonly")
         self.mode.current(0)
-        self.mode.grid(row=0, column=3, padx=8, pady=4, sticky="w")
+        self.mode.pack(side="left", padx=4, pady=4)
+
+        # ── Logins — HAR platform ka APNA alag login (Hamza ki hidayat:
+        # Quotex ka login Quotex wala, IQ Option ka login IQ Option wala;
+        # koi shared login form nahi). Jo source select ho, sirf usi
+        # platform ka login frame active rehta hai.
+        self.qx_frame, self.qx_email, self.qx_pw = self._login_frame(
+            root, "Quotex Login — apna Quotex account")
+        self.iq_frame, self.iq_email, self.iq_pw = self._login_frame(
+            root, "IQ Option Login — apna IQ Option account")
 
         # ── Assets + timeframes ───────────────────────────────────────
         af = tk.LabelFrame(root, text="Assets (OTC) — jo pairs dekhne hain", bg="#0a0a14",
@@ -214,6 +213,39 @@ class SignalBotGUI:
         self.log_msg("Signal Bot v1.2 tayyar! Pehle DEMO par test karo. ⚠️")
         self.log_msg("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain.")
         self.log_msg("Source upar se chuno: Quotex Feed (OTC), IQ Option Feed (login, PRACTICE default) ya Real Market Feed (asal market, login nahi).")
+        self.log_msg("Har platform ka login ALAG hai: Quotex ka apna frame, IQ Option ka apna frame — jo source select hoga, usi ka login chalega.")
+        self._apply_source_ui()
+
+    # ── login frame builder (har platform ka alag frame) ────────────
+
+    def _login_frame(self, root, title):
+        """Ek platform ka apna login frame: (frame, email_entry, pw_entry)."""
+        f = tk.LabelFrame(root, text=title, bg="#0a0a14", fg="#00d4aa",
+                          font=("Arial", 10, "bold"))
+        f.pack(fill="x", padx=15, pady=4)
+        tk.Label(f, text="Email:", bg="#0a0a14", fg="#fff").grid(
+            row=0, column=0, padx=8, pady=3, sticky="w")
+        email = tk.Entry(f, width=35, bg="#1a1a2e", fg="#fff", insertbackground="#fff")
+        email.grid(row=0, column=1, padx=8, pady=3)
+        tk.Label(f, text="Password:", bg="#0a0a14", fg="#fff").grid(
+            row=0, column=2, padx=8, pady=3, sticky="w")
+        pw = tk.Entry(f, width=28, show="*", bg="#1a1a2e", fg="#fff",
+                      insertbackground="#fff")
+        pw.grid(row=0, column=3, padx=8, pady=3)
+        return f, email, pw
+
+    @staticmethod
+    def _set_fields(state, *entries):
+        for e in entries:
+            e.config(state=state)
+
+    def creds_for(self, src):
+        """Selected source ke APNE login fields se (email, password)."""
+        if src == "quotex":
+            return self.qx_email.get(), self.qx_pw.get()
+        if src == "iqoption":
+            return self.iq_email.get(), self.iq_pw.get()
+        return "", ""
 
     # ── GUI helpers (thread-safe via after) ───────────────────────────
 
@@ -243,8 +275,11 @@ class SignalBotGUI:
     def _apply_source_ui(self):
         src = self.current_source()
         rm = src == "realmarket"
-        self.email.config(state="disabled" if rm else "normal")
-        self.pw.config(state="disabled" if rm else "normal")
+        # Har platform ka login SIRF apne source par active — doosra band.
+        self._set_fields("normal" if src == "quotex" else "disabled",
+                         self.qx_email, self.qx_pw)
+        self._set_fields("normal" if src == "iqoption" else "disabled",
+                         self.iq_email, self.iq_pw)
         self.mode.config(state="disabled" if rm else "readonly")
         disp_map = dict(ASSETS)
         for code, cb in self.asset_checks.items():
@@ -261,11 +296,11 @@ class SignalBotGUI:
         elif src == "iqoption":
             self.source_note.config(
                 text="IQ Option login chahiye — Balance DEMO = IQ ka PRACTICE account")
-            self.log_msg("IQ Option mode: signals IQ Option candles se ayenge — IQ Option wala email/password likho, Balance DEMO (PRACTICE) rakho.")
+            self.log_msg("IQ Option mode: signals IQ Option candles se ayenge — neeche IQ Option Login wale frame me IQ Option wala email/password likho, Balance DEMO (PRACTICE) rakho.")
         else:
             self.source_note.config(
                 text="Quotex login chahiye — signals Quotex OTC candles se")
-            self.log_msg("Quotex mode: signals Quotex OTC candles se ayenge — login lazmi hai.")
+            self.log_msg("Quotex mode: signals Quotex OTC candles se ayenge — Quotex Login wale frame me login likho.")
 
     def beep(self, kind="signal"):
         if not self.sound_var.get():
@@ -355,9 +390,14 @@ class SignalBotGUI:
 
     def start_bot(self):
         src = self.current_source()
-        if src in ("quotex", "iqoption") and (not self.email.get() or not self.pw.get()):
-            messagebox.showerror("Error", "Email aur Password likho!")
-            return
+        if src in ("quotex", "iqoption"):
+            _em, _pw = self.creds_for(src)
+            if not _em or not _pw:
+                messagebox.showerror(
+                    "Error",
+                    "Quotex Login frame me Email aur Password likho!" if src == "quotex"
+                    else "IQ Option Login frame me Email aur Password likho!")
+                return
         assets = [code for code, _ in ASSETS if self.asset_vars[code].get()]
         if not assets:
             messagebox.showerror("Error", "Kam az kam aik asset select karo!")
@@ -486,7 +526,7 @@ class SignalBotGUI:
                 self.log_msg(f"⚠️ Data process error: {e}")
 
         self.iq_feed = IqOptionFeed(
-            self.email.get(), self.pw.get(), assets, practice=practice,
+            self.iq_email.get(), self.iq_pw.get(), assets, practice=practice,
             on_candle=on_candle, on_status=self.log_msg)
         threading.Thread(target=self.iq_feed.run, daemon=True,
                          name="iq-feed").start()
@@ -527,7 +567,7 @@ class SignalBotGUI:
         api = None
         try:
             self.log_msg("Quotex se connect ho raha...")
-            api = QuotexAPI(email=self.email.get(), password=self.pw.get())
+            api = QuotexAPI(email=self.qx_email.get(), password=self.qx_pw.get())
             profile = await api.connect()
             em = getattr(profile, "email", "OK")
             self.log_msg(f"✅ Connected: {em}")
