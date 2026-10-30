@@ -31,7 +31,9 @@ v1.3 adds a fourth source (Phase 2, EXE only):
     package PC par installed MT5 terminal se ticks leta hai; 30s/1m
     candles wahi engine banata hai, source stamp "mt5". DEMO account
     recommended. (APK me MT5 nahi — third-party Android apps ke liye
-    koi official MT5 API nahi hai.)
+    koi official MT5 API nahi hai.) mt5_feed numpy bhi import karta
+    hai taake PyInstaller use bundle kare — MT5 ke rate/tick arrays
+    numpy par bante hain.
 
 SIGNAL ONLY - this bot places NO trades. It shows a big banner, plays a
 sound and logs the signal; the user places the trade wherever he wants.
