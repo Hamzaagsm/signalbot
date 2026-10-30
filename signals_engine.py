@@ -22,8 +22,10 @@ agrees, +1 if RSI sits on the signal's side of 50, +1 if 2+ strategies
 fire on the same candle (confluence). >= 3 points = "STRONG".
 
 Results: after the signalled next candle closes, its direction is
-compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall
-AND per strategy kind, so on demo you can see which method performs.
+compared with the signal -> WIN / LOSS / DRAW. Stats are kept overall,
+per strategy kind, AND per (source, kind) — v1.1 adds a feed "source"
+stamp ("quotex" vs "realmarket") so the demo record can show which
+feed actually performs better.
 
 Everything here is pure Python (offline-testable, see test_signals.py).
 NO orders are placed anywhere - v1 is a signal-only bot by design.
@@ -39,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 KIND_LABELS = {"perfect": "Perfect Candle", "engulfing": "Engulfing", "pinbar": "Pin Bar"}
+SOURCE_LABELS = {"quotex": "Quotex", "realmarket": "Real Market"}
 
 
 # ── data classes ──────────────────────────────────────────────────────
@@ -94,6 +97,7 @@ class Signal:
     strength: int = 1   # agreement score (see module docstring)
     grade: str = "LIGHT"          # "STRONG" / "NORMAL" / "LIGHT"
     detail: str = ""              # e.g. "body 91%" / "wick 74%"
+    source: str = "quotex"        # feed that produced it: "quotex" / "realmarket"
     result: Optional[str] = None  # "WIN" / "LOSS" / "DRAW"
     result_close: Optional[float] = None
 
@@ -104,6 +108,10 @@ class Signal:
     @property
     def kind_label(self) -> str:
         return KIND_LABELS.get(self.kind, self.kind)
+
+    @property
+    def source_label(self) -> str:
+        return SOURCE_LABELS.get(self.source, self.source)
 
 
 @dataclass
@@ -340,6 +348,7 @@ class SignalEngine:
                  rsi_overbought: float = 70.0,
                  rsi_oversold: float = 30.0,
                  max_signals: int = 0,            # 0 = unlimited (issued count)
+                 source: str = "quotex",          # feed stamp for stats/history
                  on_signal: Optional[Callable[[Signal], None]] = None,
                  on_result: Optional[Callable[[Signal], None]] = None,
                  on_blocked: Optional[Callable[[str, str, str], None]] = None,
@@ -353,6 +362,7 @@ class SignalEngine:
         self.rsi_ob = float(rsi_overbought)
         self.rsi_os = float(rsi_oversold)
         self.max_signals = int(max_signals)
+        self.source = source
         self.on_signal = on_signal
         self.on_result = on_result
         self.on_blocked = on_blocked
@@ -372,6 +382,8 @@ class SignalEngine:
         self.history: List[Signal] = []
         self.stats = Stats()
         self.stats_by_kind: Dict[str, Stats] = {k: Stats() for k in KIND_LABELS}
+        self.stats_by_source_kind: Dict[Tuple[str, str], Stats] = {
+            (source, k): Stats() for k in KIND_LABELS}
         self.issued = 0
 
     # -- input ---------------------------------------------------------
@@ -405,6 +417,8 @@ class SignalEngine:
             sig.result_close = candle.close
             self.stats.record(sig.result)
             self.stats_by_kind[sig.kind].record(sig.result)
+            self.stats_by_source_kind.setdefault(
+                (sig.source, sig.kind), Stats()).record(sig.result)
             if self.on_result:
                 self.on_result(sig)
 
@@ -476,6 +490,7 @@ class SignalEngine:
                 strength=strength,
                 grade=grade,
                 detail=detail,
+                source=self.source,
             )
             self.pending.setdefault(stream, []).append(sig)
             self.history.append(sig)
