@@ -40,12 +40,29 @@ Engulfing / Pin Bar) — on screen and in the log. Run it on demo and
 see for yourself which method actually performs. No method wins
 every trade; the record is kept in the open, not promised in advance.
 
+## Signal sources (v1.2)
+Pick the feed at the top of the window — the engine, strategies and
+result tracking are identical; only the candle source (and its stats
+column) changes:
+- **Quotex Feed** — Quotex OTC candles, Quotex login (v1.0 behaviour).
+- **IQ Option Feed** — IQ Option candles, IQ Option login,
+  **PRACTICE (DEMO) balance by default**; regular pairs while the
+  forex market is open, OTC pairs when it is closed (weekends).
+- **Real Market Feed** — real forex quotes from Yahoo Finance over
+  HTTPS; **no broker login at all** (binary prices move after the
+  real market, so signals are read where the move starts).
+
+Stats are kept separately per (source, strategy), so a demo run shows
+honestly which feed performs better.
+
 ## ⚠️ Please read
 - **Signals are not a guarantee of profit.**
 - **Test on DEMO first**, for days, before even thinking of real money.
-- This bot **places NO trades** — v1 is signal-only.
+- This bot **places NO trades** — signal-only in every version.
 - Quotex has NO official API; the candle feed uses the same
-  reverse-engineered QuotexAPI library as Hamza Qx Bot.
+  reverse-engineered QuotexAPI library as Hamza Qx Bot. The IQ Option
+  feed uses the same login/websocket protocol as the iqoptionapi
+  library (read-only subset: login, balances, candles — no orders).
 - Trend/RSI filters need candle history, so they warm up after start.
 
 ## Settings
