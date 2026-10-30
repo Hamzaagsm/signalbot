@@ -65,7 +65,7 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         title.setGravity(Gravity.CENTER);
         root.addView(title);
         TextView ver = new TextView(this);
-        ver.setText("Perfect Candle Signals v1.1 (30s / 1m) — SIGNAL ONLY, no auto trade");
+        ver.setText("Perfect Candle Signals v1.2 (30s / 1m) — SIGNAL ONLY, no auto trade");
         ver.setTextColor(Color.parseColor("#666677"));
         ver.setTextSize(11);
         ver.setGravity(Gravity.CENTER);
@@ -84,14 +84,14 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         sourceSp = new Spinner(this);
         ArrayAdapter<String> sa = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item,
-                new String[]{"Quotex Feed", "Real Market Feed"});
+                new String[]{"Quotex Feed", "IQ Option Feed", "Real Market Feed"});
         sa.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sourceSp.setAdapter(sa);
         srcRow.addView(sourceSp, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 2));
         root.addView(srcRow);
         TextView srcNote = new TextView(this);
-        srcNote.setText("Real Market = asal forex data (Yahoo) — Quotex login NAHI chahiye");
+        srcNote.setText("Real Market = asal forex data (Yahoo) — login NAHI chahiye • IQ Option = apna IQ login (PRACTICE default)");
         srcNote.setTextColor(Color.parseColor("#666677"));
         srcNote.setTextSize(11);
         srcNote.setGravity(Gravity.CENTER);
@@ -226,24 +226,27 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
 
         setContentView(new ScrollView(this) {{ addView(root); }});
 
-        log("Signal Bot v1.1 tayyar! Pehle DEMO par test karo. ⚠️");
+        log("Signal Bot v1.2 tayyar! Pehle DEMO par test karo. ⚠️");
         log("Perfect candle = body candle ke kul range ka diya gaya % ya zyada. Engulfing aur Pin Bar bhi on hain (Settings).");
-        log("Source upar se chuno: Quotex Feed (OTC) ya Real Market Feed (asal market, login nahi).");
+        log("Source upar se chuno: Quotex Feed (OTC), IQ Option Feed (login, PRACTICE default) ya Real Market Feed (asal market, login nahi).");
 
-        // Login screen se "Real Market" wala rasta aaye to wahi source pehle se chuna ho.
-        if ("realmarket".equals(getIntent().getStringExtra("source"))) {
-            currentSource = "realmarket";
-            sourceSp.setSelection(1);
+        // Login screen se koi source chun kar aaye to wahi pehle se select ho.
+        String intentSource = getIntent().getStringExtra("source");
+        if ("realmarket".equals(intentSource) || "iqoption".equals(intentSource)) {
+            currentSource = intentSource;
+            sourceSp.setSelection("iqoption".equals(intentSource) ? 1 : 2);
             applySourceUi();
         }
         sourceSp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             public void onItemSelected(android.widget.AdapterView<?> p, View v, int pos, long id) {
-                String src = pos == 1 ? "realmarket" : "quotex";
+                String src = pos == 1 ? "iqoption" : (pos == 2 ? "realmarket" : "quotex");
                 if (!src.equals(currentSource)) {
                     currentSource = src;
                     applySourceUi();
                     if (src.equals("realmarket")) {
-                        log("Real Market mode: Quotex login ki zaroorat NAHI — signals asal market data (Yahoo Finance) se ayenge.");
+                        log("Real Market mode: kisi broker ka login NAHI chahiye — signals asal market data (Yahoo Finance) se ayenge.");
+                    } else if (src.equals("iqoption")) {
+                        log("IQ Option mode: signals IQ Option candles se ayenge — IQ Option login (neeche wali screen) lazmi hai, Balance DEMO = PRACTICE.");
                     } else {
                         log("Quotex mode: signals Quotex OTC candles se ayenge — login lazmi hai.");
                     }
@@ -267,6 +270,7 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
     }
 
     private boolean isRealMarket() { return "realmarket".equals(currentSource); }
+    private boolean isIqOption() { return "iqoption".equals(currentSource); }
 
     /** EXE _apply_source_ui ka mirror: Real Market me login/mode band. */
     private void applySourceUi() {
@@ -370,12 +374,15 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
     // ── bot control ───────────────────────────────────────────────────
     private void startBot() {
         boolean rm = isRealMarket();
+        boolean iq = isIqOption();
         SharedPreferences p = getSharedPreferences(LoginActivity.PREFS, MODE_PRIVATE);
-        String email = p.getString("email", "");
-        String pw = p.getString("password", "");
-        // Real Market mode: Quotex login NAHI chahiye (EXE v1.1 jaisa).
+        // Har source ke apne credentials: Quotex wale alag, IQ Option wale alag.
+        String email = iq ? p.getString("iq_email", "") : p.getString("email", "");
+        String pw = iq ? p.getString("iq_password", "") : p.getString("password", "");
+        // Real Market mode: kisi broker ka login NAHI chahiye (EXE v1.1 jaisa).
         if (!rm && (email.isEmpty() || pw.isEmpty())) {
-            Toast.makeText(this, "Pehle login karo!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, iq ? "Pehle IQ Option login karo!" : "Pehle login karo!",
+                    Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
@@ -395,7 +402,8 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
         cfg.password = pw;
         cfg.isDemo = isDemo;
         cfg.source = currentSource;
-        cfg.assetMap = rm ? s.assetMapRealMarket() : s.assetMap();
+        cfg.assetMap = rm ? s.assetMapRealMarket()
+                : (iq ? s.assetMapIqOption() : s.assetMap());
         cfg.timeframes = s.timeframes();
         cfg.thresholdPct = s.thresholdPct;
         cfg.strategies = s.strategies();
@@ -408,7 +416,7 @@ public class MainActivity extends Activity implements SignalBotEngine.Ui {
                 + " | Trend: " + (cfg.trendFilter ? "ON" : "OFF")
                 + " | RSI: " + (cfg.rsiFilter ? "ON" : "OFF")
                 + String.format(Locale.US, " | Body %.0f%%", cfg.thresholdPct)
-                + " | " + (rm ? "REAL MARKET" : (isDemo ? "DEMO" : "⚠️ REAL")));
+                + " | " + (rm ? "REAL MARKET" : (iq ? "IQ OPTION " : "") + (isDemo ? "DEMO" : "⚠️ REAL")));
         bannerTv.setText("— signal ka intezar… —");
         bannerTv.setBackgroundColor(Color.parseColor("#1a1a2e"));
         bannerTv.setTextColor(Color.parseColor("#888888"));
