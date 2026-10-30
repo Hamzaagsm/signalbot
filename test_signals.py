@@ -436,6 +436,186 @@ check("iqoption engine: perfect candle -> CALL, source label IQ Option",
 check("iqoption per-(source, kind) stats recorded",
       _iq_eng.stats_by_source_kind[("iqoption", "perfect")].total >= 1)
 
+# ── v1.3 MT5 FEED (EXE only; MetaTrader5 module MOCKED — it is
+#    Windows-only and cannot run on this dev machine) ─────────────────
+import mt5_feed as mf
+
+check("mt5 missing-package message is plain-language",
+      "MT5 terminal" in mf.MISSING_TERMINAL_MSG and "INSTALL" in mf.MISSING_TERMINAL_MSG)
+check("resolve_symbol: exact name wins",
+      mf.resolve_symbol("EURUSD", ["EURUSD.m", "EURUSD"]) == "EURUSD")
+check("resolve_symbol: suffix pair resolved, shortest candidate",
+      mf.resolve_symbol("GBPUSD", ["GBPUSD.pro", "GBPUSD.m", "USDJPY"]) == "GBPUSD.m")
+check("resolve_symbol: unknown pair -> None",
+      mf.resolve_symbol("AUDUSD", ["EURUSD", "GBPUSD.m"]) is None)
+check("tick_price: bid first, then last, then ask",
+      mf.tick_price({"bid": 1.1, "last": 1.2, "ask": 1.3}) == 1.1
+      and mf.tick_price({"bid": 0, "last": 1.2, "ask": 1.3}) == 1.2
+      and mf.tick_price({"bid": 0, "last": 0, "ask": 0}) is None)
+check("account mode labels",
+      mf.account_mode_label(0) == "DEMO" and mf.account_mode_label(2) == "REAL"
+      and mf.account_mode_label(9) == "UNKNOWN")
+
+
+class _FakeMT5:
+    TIMEFRAME_M1 = 1
+    COPY_TICKS_ALL = -1
+
+    def __init__(self):
+        self.init_ok = True
+        self.login_ok = True
+        self.shutdown_called = False
+        self.selected = []
+        self.tick_rows = []
+        self.tick_info = None
+        self.rates = []
+        self._symbols = [{"name": "EURUSD"}, {"name": "GBPUSD.m"}, {"name": "USDJPY"}]
+
+    def initialize(self, **kw):
+        return self.init_ok
+
+    def last_error(self):
+        return (-10003, "terminal not found (fake)")
+
+    def login(self, login, password=None, server=None):
+        return self.login_ok
+
+    def account_info(self):
+        return {"login": 12345, "server": "FakeServer-Demo",
+                "balance": 5000.0, "currency": "USD", "trade_mode": 0}
+
+    def symbols_get(self):
+        return list(self._symbols)
+
+    def symbol_select(self, sym, flag):
+        self.selected.append(sym)
+        return True
+
+    def copy_rates_from(self, sym, tf, ts, count):
+        return list(self.rates)
+
+    def copy_ticks_from(self, sym, frm, count, flags):
+        return list(self.tick_rows)
+
+    def symbol_info_tick(self, sym):
+        return self.tick_info
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+
+# missing package: polite status, no crash, immediate return
+_msgs = []
+_mf_feed = mf.Mt5Feed(assets=["EURUSD"], on_status=_msgs.append, mt5_module=None)
+_mf_feed.run()
+check("mt5 missing module -> status + clean return",
+      _msgs and _msgs[0] == mf.MISSING_PACKAGE_MSG)
+
+# terminal missing / initialize fail
+_fake = _FakeMT5()
+_fake.init_ok = False
+_msgs = []
+mf.Mt5Feed(12345, "pw", "FakeServer-Demo", ["EURUSD"],
+           on_status=_msgs.append, mt5_module=_fake).run()
+check("mt5 initialize fail -> terminal-missing message, no crash",
+      any(mf.MISSING_TERMINAL_MSG.split(" (error")[0] in m for m in _msgs)
+      and _fake.shutdown_called)
+
+# login fail
+_fake = _FakeMT5()
+_fake.login_ok = False
+_msgs = []
+mf.Mt5Feed(12345, "wrong", "FakeServer-Demo", ["EURUSD"],
+           on_status=_msgs.append, mt5_module=_fake).run()
+check("mt5 login fail -> clear message",
+      any("MT5 login fail" in m for m in _msgs))
+
+# connect + symbol resolution + account callback
+_fake = _FakeMT5()
+_pts, _accts = [], []
+_feed = mf.Mt5Feed(12345, "pw", "FakeServer-Demo", ["EURUSD", "GBPUSD"],
+                   on_point=lambda c, t, p: _pts.append((c, t, p)),
+                   on_account=_accts.append, mt5_module=_fake)
+check("mt5 connect ok with fake terminal", _feed._connect(_fake) is True)
+check("mt5 symbols resolved (EURUSD exact, GBPUSD -> GBPUSD.m)",
+      _feed.symbols == {"EURUSD": "EURUSD", "GBPUSD": "GBPUSD.m"}
+      and _fake.selected == ["EURUSD", "GBPUSD.m"])
+check("mt5 account callback (DEMO mode)",
+      _accts and _accts[0]["login"] == 12345 and _accts[0]["mode_label"] == "DEMO")
+
+# warmup: M1 closes fed as points
+_fake.rates = [{"time": B + i * 60, "open": 1.0, "high": 1.002,
+                "low": 0.999, "close": 1.0 + i * 0.001} for i in range(5)]
+_feed._warmup(_fake)
+check("mt5 warmup feeds history closes",
+      len(_pts) == 10 and _pts[0] == ("EURUSD", B, 1.0)
+      and _pts[-1][2] == 1.0 + 4 * 0.001)
+
+# live ticks via copy_ticks_from + cursor dedup + symbol_info_tick fallback
+_feed2 = mf.Mt5Feed(0, "", "", ["EURUSD"],
+                    on_point=lambda c, t, p: _pts.append((c, t, p)),
+                    mt5_module=_fake)
+_feed2.symbols = {"EURUSD": "EURUSD"}
+_pts.clear()
+_fake.tick_rows = [
+    {"time": B + 100, "time_msc": (B + 100) * 1000, "bid": 1.1000, "ask": 1.1002, "last": 0},
+    {"time": B + 101, "time_msc": (B + 101) * 1000, "bid": 1.1005, "ask": 1.1007, "last": 0},
+]
+_n1 = _feed2.poll_asset(_fake, "EURUSD", "EURUSD")
+_n2 = _feed2.poll_asset(_fake, "EURUSD", "EURUSD")
+check("mt5 ticks emitted once, cursor dedups repeats",
+      _n1 == 2 and _n2 == 0 and _pts == [("EURUSD", B + 100, 1.1000),
+                                         ("EURUSD", B + 101, 1.1005)])
+_fake.tick_rows = []
+_fake.tick_info = {"time": B + 102, "time_msc": (B + 102) * 1000,
+                   "bid": 1.1010, "ask": 1.1012, "last": 0}
+_n3 = _feed2.poll_asset(_fake, "EURUSD", "EURUSD")
+check("mt5 symbol_info_tick fallback emits new tick",
+      _n3 == 1 and _pts[-1] == ("EURUSD", B + 102, 1.1010))
+
+# full run() smoke test in a thread (warmup points flow, stop is clean)
+import threading as _th
+_fake2 = _FakeMT5()
+_fake2.rates = [{"time": B + i * 60, "open": 1.0, "high": 1.002,
+                 "low": 0.999, "close": 1.001} for i in range(3)]
+_fake2.tick_info = {"time": B + 3600, "time_msc": (B + 3600) * 1000,
+                    "bid": 1.2, "ask": 1.2002, "last": 0}
+_run_pts = []
+_feed3 = mf.Mt5Feed(12345, "pw", "FakeServer-Demo", ["EURUSD"],
+                    on_point=lambda c, t, p: _run_pts.append((c, t, p)),
+                    poll_interval=0.02, mt5_module=_fake2)
+_t = _th.Thread(target=_feed3.run, daemon=True)
+_t.start()
+import time as _time
+_time.sleep(0.4)
+_feed3.stop()
+_t.join(timeout=5)
+check("mt5 run(): warmup flowed, stop clean, terminal shutdown",
+      len(_run_pts) == 3 and not _t.is_alive() and _fake2.shutdown_called)
+
+# engine integration: mt5-stamped signals + per-source stats
+_mt_sigs, _mt_res = [], []
+_mt_eng = SignalEngine({"EURUSD": "EUR/USD"}, [60], threshold_pct=85.0,
+                       strategies=("perfect",), trend_filter=False, rsi_filter=False,
+                       source="mt5",
+                       on_signal=_mt_sigs.append, on_result=_mt_res.append)
+_mt_feed = mf.Mt5Feed(0, "", "", ["EURUSD"],
+                      on_point=lambda c, ts, p: _mt_eng.feed(
+                          c, {"timestamp": ts, "price": p}),
+                      mt5_module=_FakeMT5())
+_mt_feed.symbols = {"EURUSD": "EURUSD"}
+_fake3 = _FakeMT5()
+for _ts, _p in [(B, 1.0000), (B + 30, 1.00095), (B + 60, 1.00095), (B + 90, 1.00120),
+                (B + 120, 1.00120)]:   # last tick closes the target candle -> result
+    _fake3.tick_rows = [{"time": _ts, "time_msc": _ts * 1000,
+                         "bid": _p, "ask": _p, "last": 0}]
+    _mt_feed.poll_asset(_fake3, "EURUSD", "EURUSD")
+check("mt5 engine: perfect candle -> CALL, source label MT5",
+      len(_mt_sigs) >= 1 and _mt_sigs[0].source == "mt5"
+      and _mt_sigs[0].source_label == "MT5")
+check("mt5 per-(source, kind) stats recorded",
+      _mt_eng.stats_by_source_kind[("mt5", "perfect")].total >= 1)
+
 print()
 if FAILED:
     print("FAILED:", FAILED); sys.exit(1)
