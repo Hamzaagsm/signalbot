@@ -73,6 +73,12 @@ public class BotSettings {
         return m;
     }
 
+    /** IQ Option mode (v1.2): plain asset code -> display without " OTC"
+     *  (feed khud Regular/OTC active chunta hai; engine key plain code hai). */
+    public java.util.LinkedHashMap<String, String> assetMapIqOption() {
+        return assetMapRealMarket();
+    }
+
     public static BotSettings load(Context ctx) {
         SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         BotSettings s = new BotSettings();
