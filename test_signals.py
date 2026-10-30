@@ -250,6 +250,192 @@ check("default engine stamps quotex source",
       sigs and sigs[0].source == "quotex"
       and eng.stats_by_source_kind[("quotex", "perfect")].wins == 1)
 
+# default source stays "quotex" (v1.0 behaviour unchanged)
+eng, sigs, res, _ = make_engine()
+feed_candle(eng, B, 1.0000, 1.00100, 0.99990, 1.00095)
+feed_candle(eng, B + 60, 1.00095, 1.00150, 1.00090, 1.00120)
+check("default engine stamps quotex source",
+      sigs and sigs[0].source == "quotex"
+      and eng.stats_by_source_kind[("quotex", "perfect")].wins == 1)
+
+# ── v1.2 IQ OPTION FEED ───────────────────────────────────────────────
+from datetime import datetime, timezone
+import iqoption_feed as iqf
+
+check("iq actives: all 6 pairs, library ids",
+      iqf.ACTIVES == {"EURUSD": (1, 76), "GBPUSD": (5, 81), "USDJPY": (6, 85),
+                      "EURGBP": (2, 77), "AUDUSD": (99, None), "EURJPY": (4, 79)})
+_wed = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)   # Wednesday noon
+_sat = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)   # Saturday noon
+_sun_early = datetime(2026, 11, 1, 21, 0, tzinfo=timezone.utc)
+_sun_late = datetime(2026, 11, 1, 23, 0, tzinfo=timezone.utc)
+_fri_late = datetime(2026, 10, 30, 23, 0, tzinfo=timezone.utc)
+check("market open Wed noon, closed Sat/Sun-early/Fri-late",
+      iqf.market_open(_wed) is True and iqf.market_open(_sat) is False
+      and iqf.market_open(_sun_early) is False and iqf.market_open(_sun_late) is True
+      and iqf.market_open(_fri_late) is False)
+check("active_for: weekday -> regular, weekend -> OTC",
+      iqf.active_for("EURUSD", _wed) == (1, False)
+      and iqf.active_for("EURUSD", _sat) == (76, True)
+      and iqf.active_for("USDJPY", _sat) == (85, True))
+check("active_for: AUDUSD has no OTC -> regular even on weekend",
+      iqf.active_for("AUDUSD", _sat) == (99, False))
+
+_sub = iqf.build_subscribe(76)
+check("subscribe envelope (candle-generated, str active_id, size 15)",
+      _sub["name"] == "subscribeMessage"
+      and _sub["msg"]["name"] == "candle-generated"
+      and _sub["msg"]["params"]["routingFilters"] == {"active_id": "76", "size": 15})
+_gc = iqf.build_get_candles(1, 1793334000, count=130)
+check("get-candles envelope (sendMessage, v2.0 body)",
+      _gc["name"] == "sendMessage" and _gc["msg"]["name"] == "get-candles"
+      and _gc["msg"]["version"] == "2.0"
+      and _gc["msg"]["body"] == {"active_id": 1, "size": 60, "to": 1793334000, "count": 130})
+check("authenticate envelope (ssid + protocol 3)",
+      iqf.build_authenticate("SSID123") == {"name": "authenticate",
+      "msg": {"ssid": "SSID123", "protocol": 3}, "request_id": ""})
+
+_pt = iqf.parse_candle_msg({"from": 1793334000, "to": 1793334015, "open": 1.1000,
+                            "close": 1.1010, "min": 0.9990, "max": 1.1015,
+                            "active_id": 1, "size": 15})
+check("iq candle normalised (min->low, max->high)",
+      _pt == {"timestamp": 1793334000, "open": 1.1000, "high": 1.1015,
+              "low": 0.9990, "close": 1.1010})
+check("iq candle garbage -> None",
+      iqf.parse_candle_msg({"from": "x"}) is None
+      and iqf.parse_candle_msg(None) is None
+      and iqf.parse_candle_msg({"from": 1793334000, "open": -1, "close": 1,
+                                "min": 1, "max": 1}) is None)
+
+_bal = iqf.parse_balances([{"id": 111, "type": 1, "amount": 250.5},
+                           {"id": 222, "type": 4, "amount": 10000},
+                           {"id": 333, "type": 2, "amount": 50}])
+check("balances parsed (type1=real, type4=practice)",
+      _bal == {"real": 250.5, "practice": 10000.0, "real_id": 111, "practice_id": 222})
+check("ssid from cookie header",
+      iqf.ssid_from_login(200, ["ssid=ABC123xyz; Path=/; HttpOnly"], b"") == "ABC123xyz")
+check("ssid from JSON body fallback",
+      iqf.ssid_from_login(200, [], b'{"data": {"ssid": "JSONSSID"}}') == "JSONSSID")
+try:
+    iqf.ssid_from_login(401, [], b'{"message":"bad credentials"}')
+    _ssid_err = False
+except iqf.IqError:
+    _ssid_err = True
+check("login 401 without ssid -> IqError", _ssid_err)
+
+# websocket framing (fake socket, no network): handshake bytes are fed
+# by hand; we test frame build/parse + ping->pong at the frame level.
+class _FakeSock:
+    def __init__(self, incoming=b""):
+        self.incoming = bytearray(incoming)
+        self.sent = bytearray()
+    def recv(self, n):
+        out = bytes(self.incoming[:n])
+        del self.incoming[:n]
+        return out
+    def sendall(self, data):
+        self.sent += data
+    def settimeout(self, t): pass
+    def gettimeout(self): return None
+    def close(self): pass
+
+_ws = iqf._WsClient("iqoption.com", "/echo/websocket")
+# server text frame "hello" (unmasked), then a ping "hi", then text "bye"
+_ws._buf = b"\x81\x05hello" + b"\x89\x02hi" + b"\x81\x03bye"
+_ws.sock = _FakeSock()
+check("ws recv parses text frame", _ws.recv_text() == "hello")
+check("ws recv answers ping, then parses next frame", _ws.recv_text() == "bye")
+_pong = bytes(_ws.sock.sent)
+check("ws ping answered with masked pong (opcode 0xA)",
+      len(_pong) == 8 and (_pong[0] & 0x0F) == 0xA and (_pong[1] & 0x80) != 0)
+_ws.sock.sent = bytearray()
+_ws.send_text("abc")
+_f = bytes(_ws.sock.sent)
+_mask = _f[2:6]
+_unmasked = bytes(b ^ _mask[i % 4] for i, b in enumerate(_f[6:9]))
+check("ws send_text builds masked text frame",
+      (_f[0] & 0x0F) == 0x1 and (_f[1] & 0x80) != 0 and (_f[1] & 0x7F) == 3
+      and _unmasked == b"abc")
+
+# full session over a fake websocket (scripted server messages)
+class _FakeWs:
+    def __init__(self, incoming):
+        self.incoming = list(incoming)
+        self.sent = []
+        self.sock = None
+        self.feed = None
+    def connect(self): pass
+    def send_text(self, text):
+        import json as _json
+        self.sent.append(_json.loads(text))
+    def recv_text(self):
+        if self.incoming:
+            import json as _json
+            return _json.dumps(self.incoming.pop(0))
+        if self.feed is not None:
+            self.feed.stop()
+        return None
+    def close(self): pass
+
+_hist = [{"from": B + i * 60, "to": B + (i + 1) * 60, "open": 1.0, "close": 1.0 + i * 0.001,
+          "min": 0.999, "max": 1.002} for i in range(5)]
+_incoming = [
+    {"name": "timeSync", "msg": (B + 3600) * 1000},
+    {"name": "authenticated", "msg": True},
+    {"name": "balances", "msg": [{"id": 111, "type": 1, "amount": 250.5},
+                                 {"id": 222, "type": 4, "amount": 10000}]},
+    {"name": "candles", "msg": {"candles": _hist}},                    # EURUSD warmup
+    {"name": "candles", "msg": {"candles": _hist}},                    # GBPUSD warmup
+    {"name": "candle-generated", "msg": {"active_id": iqf.active_for("EURUSD")[0],
+        "size": 15, "from": B + 7200, "to": B + 7215, "open": 1.1000,
+        "close": 1.1010, "min": 0.9990, "max": 1.1015}},
+]
+_fake = _FakeWs(_incoming)
+_got, _bals = [], []
+_feed3 = iqf.IqOptionFeed("a@b.c", "pw", ["EURUSD", "GBPUSD"], practice=True,
+                          on_candle=lambda c, p: _got.append((c, p)),
+                          on_balances=lambda p, r: _bals.append((p, r)),
+                          login_fn=lambda e, p: "TESTSSID",
+                          ws_factory=lambda: _fake)
+_fake.feed = _feed3
+_feed3.run()
+_sent_names = [m["name"] for m in _fake.sent]
+check("iq session: authenticate sent with ssid",
+      _fake.sent[0] == {"name": "authenticate",
+                        "msg": {"ssid": "TESTSSID", "protocol": 3}, "request_id": ""})
+check("iq session: subscribes both assets",
+      _sent_names.count("subscribeMessage") == 2)
+check("iq session: PRACTICE balance selected (change-balance id 222)",
+      any(m["name"] == "api_profile_changebalance" and m["msg"]["balance_id"] == 222
+          for m in _fake.sent))
+check("iq session: balances callback (practice, real)",
+      _bals == [(10000.0, 250.5)])
+check("iq session: warmup closes fed for both assets",
+      sum(1 for c, p in _got if "price" in p) == 10)
+_live = [p for c, p in _got if "open" in p]
+check("iq session: live candle normalised + routed to EURUSD",
+      len(_live) == 1 and _live[0]["high"] == 1.1015 and _live[0]["low"] == 0.9990
+      and [c for c, p in _got if "open" in p] == ["EURUSD"])
+
+# engine integration: iqoption-stamped signals + per-source stats
+_iq_sigs, _iq_res = [], []
+_iq_eng = SignalEngine({"EURUSD": "EUR/USD"}, [60], threshold_pct=85.0,
+                       strategies=("perfect",), trend_filter=False, rsi_filter=False,
+                       source="iqoption",
+                       on_signal=_iq_sigs.append, on_result=_iq_res.append)
+_iq_eng.feed("EURUSD", iqf.parse_candle_msg(
+    {"from": B, "to": B + 60, "open": 1.0000, "close": 1.00095,
+     "min": 0.99990, "max": 1.00100}))
+_iq_eng.feed("EURUSD", iqf.parse_candle_msg(
+    {"from": B + 60, "to": B + 120, "open": 1.00095, "close": 1.00120,
+     "min": 1.00090, "max": 1.00150}))
+_iq_eng.feed("EURUSD", {"timestamp": B + 120, "price": 1.00120})
+check("iqoption engine: perfect candle -> CALL, source label IQ Option",
+      len(_iq_sigs) >= 1 and _iq_sigs[0].source == "iqoption"
+      and _iq_sigs[0].source_label == "IQ Option")
+check("iqoption per-(source, kind) stats recorded",
+      _iq_eng.stats_by_source_kind[("iqoption", "perfect")].total >= 1)
+
 print()
 if FAILED:
     print("FAILED:", FAILED); sys.exit(1)
