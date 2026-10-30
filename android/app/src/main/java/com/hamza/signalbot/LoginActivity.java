@@ -43,7 +43,7 @@ public class LoginActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Perfect Candle Signals v1.0 — SIGNAL ONLY, no auto trade");
+        sub.setText("Perfect Candle Signals v1.1 — SIGNAL ONLY, no auto trade");
         sub.setTextColor(Color.parseColor("#888888"));
         sub.setGravity(Gravity.CENTER);
         root.addView(sub);
@@ -71,6 +71,16 @@ public class LoginActivity extends Activity {
         loginBtn.setTextColor(Color.BLACK);
         root.addView(loginBtn, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(spacer(12));
+
+        // v1.1: Real Market mode — Quotex login ke baghair, asal market data se signals.
+        Button rmBtn = new Button(this);
+        rmBtn.setText("📡 REAL MARKET — BINA LOGIN SIGNALS");
+        rmBtn.setTextSize(15);
+        rmBtn.setBackgroundColor(Color.parseColor("#1a1a2e"));
+        rmBtn.setTextColor(Color.parseColor("#00d4aa"));
+        root.addView(rmBtn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(spacer(16));
 
         statusTv = new TextView(this);
@@ -88,6 +98,12 @@ public class LoginActivity extends Activity {
         setContentView(new ScrollView(this) {{ addView(root); }});
 
         loginBtn.setOnClickListener(v -> doLogin());
+        rmBtn.setOnClickListener(v -> {
+            Intent i = new Intent(this, MainActivity.class);
+            i.putExtra("source", "realmarket");
+            startActivity(i);
+            finish();
+        });
     }
 
     private View spacer(int h) {
