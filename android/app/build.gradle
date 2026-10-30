@@ -1,0 +1,28 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.hamza.signalbot'
+    compileSdk 34
+    defaultConfig {
+        applicationId "com.hamza.signalbot"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+    buildTypes {
+        debug { signingConfig signingConfigs.debug }
+        // Same signing approach as Hamza Qx Bot: release is signed with the
+        // debug key so the APK installs directly on the phone.
+        release { signingConfig signingConfigs.debug; minifyEnabled false }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    // Real org.json for JVM unit tests (shadows the android.jar stubs).
+    testImplementation 'org.json:json:20231013'
+}
