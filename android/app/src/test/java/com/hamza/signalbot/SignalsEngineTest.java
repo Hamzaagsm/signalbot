@@ -33,7 +33,7 @@ public class SignalsEngineTest {
     }
 
     static Harness makeEngine(Set<String> strategies, List<Integer> tfs, double threshold,
-                              boolean trendFilter, boolean rsiFilter, int maxSignals) {
+                              boolean trendFilter, boolean rsiFilter, int maxSignals) throws Exception {
         Map<String, String> assets = new LinkedHashMap<>();
         assets.put("EURUSD_otc", "EUR/USD OTC");
         Harness h = new Harness();
@@ -45,47 +45,47 @@ public class SignalsEngineTest {
         return h;
     }
 
-    static Harness makeEngine() {
+    static Harness makeEngine() throws Exception {
         return makeEngine(strat("perfect"), tfs(60), 85.0, false, false, 0);
     }
 
-    static Set<String> strat(String... kinds) {
+    static Set<String> strat(String... kinds) throws Exception {
         return new LinkedHashSet<>(Arrays.asList(kinds));
     }
 
-    static List<Integer> tfs(int... tfs) {
+    static List<Integer> tfs(int... tfs) throws Exception {
         List<Integer> l = new ArrayList<>();
         for (int t : tfs) l.add(t);
         return l;
     }
 
-    static JSONObject ohlc(long ts, double o, double h, double l, double c) {
+    static JSONObject ohlc(long ts, double o, double h, double l, double c) throws Exception {
         JSONObject j = new JSONObject();
         j.put("timestamp", ts);
         j.put("open", o); j.put("high", h); j.put("low", l); j.put("close", c);
         return j;
     }
 
-    static JSONObject tick(long ts, double price) {
+    static JSONObject tick(long ts, double price) throws Exception {
         JSONObject j = new JSONObject();
         j.put("timestamp", ts);
         j.put("price", price);
         return j;
     }
 
-    static void feedCandle(SignalsEngine eng, long start, double o, double h, double l, double c) {
+    static void feedCandle(SignalsEngine eng, long start, double o, double h, double l, double c) throws Exception {
         feedCandle(eng, start, o, h, l, c, 60);
     }
 
     static void feedCandle(SignalsEngine eng, long start, double o, double h, double l,
-                           double c, int tf) {
+                           double c, int tf) throws Exception {
         eng.feed("EURUSD_otc", ohlc(start, o, h, l, c));
         eng.feed("EURUSD_otc", tick(start + tf, c));  // closes the candle
     }
 
     // ── PERFECT CANDLE ────────────────────────────────────────────────
 
-    @Test public void perfectGreenCall() {
+    @Test public void perfectGreenCall() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);  // body 86.4%
         assertEquals(1, h.sigs.size());
@@ -93,32 +93,32 @@ public class SignalsEngineTest {
         assertEquals("perfect", h.sigs.get(0).kind);
     }
 
-    @Test public void perfectDetailShowsBodyPct() {
+    @Test public void perfectDetailShowsBodyPct() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
         assertTrue(h.sigs.get(0).detail.contains("86%"));
     }
 
-    @Test public void perfectRedPut() {
+    @Test public void perfectRedPut() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.00100, 1.00105, 0.99995, 1.00005);
         assertEquals(1, h.sigs.size());
         assertEquals("put", h.sigs.get(0).direction);
     }
 
-    @Test public void smallBodyNoSignal() {
+    @Test public void smallBodyNoSignal() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.0000, 1.00110, 0.99990, 1.00060);  // body 50%
         assertEquals(0, h.sigs.size());
     }
 
-    @Test public void dojiNoSignal() {
+    @Test public void dojiNoSignal() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.00050, 1.00110, 0.99990, 1.00050);
         assertEquals(0, h.sigs.size());
     }
 
-    @Test public void threshold70Passes76() {
+    @Test public void threshold70Passes76() throws Exception {
         Harness h = makeEngine(strat("perfect"), tfs(60), 70.0, false, false, 0);
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99995, 1.00080);  // body 76.2%
         assertEquals(1, h.sigs.size());
@@ -126,7 +126,7 @@ public class SignalsEngineTest {
 
     // ── RESULT TRACKING ───────────────────────────────────────────────
 
-    @Test public void nextCandleUpWin() {
+    @Test public void nextCandleUpWin() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
         feedCandle(h.eng, B + 60, 1.00095, 1.00150, 1.00090, 1.00120);
@@ -137,7 +137,7 @@ public class SignalsEngineTest {
         assertEquals(1, h.eng.statsByKind.get("perfect").wins);
     }
 
-    @Test public void nextCandleDownLoss() {
+    @Test public void nextCandleDownLoss() throws Exception {
         Harness h = makeEngine();
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
         feedCandle(h.eng, B + 60, 1.00095, 1.00100, 0.99980, 0.99990);
@@ -148,7 +148,7 @@ public class SignalsEngineTest {
 
     // ── TICK-BUILT 30s CANDLES ────────────────────────────────────────
 
-    @Test public void tickBuilt30sCandles() {
+    @Test public void tickBuilt30sCandles() throws Exception {
         Harness h = makeEngine(strat("perfect"), tfs(30), 85.0, false, false, 0);
         long[][] ticks = {{B, 0}, {B + 5, 0}, {B + 10, 0}, {B + 20, 0}, {B + 29, 0},
                 {B + 30, 0}, {B + 35, 0}, {B + 50, 0}, {B + 59, 0}, {B + 60, 0}};
@@ -169,7 +169,7 @@ public class SignalsEngineTest {
 
     // ── MAX SIGNALS ───────────────────────────────────────────────────
 
-    @Test public void maxSignalsCaps() {
+    @Test public void maxSignalsCaps() throws Exception {
         Harness h = makeEngine(strat("perfect"), tfs(60), 85.0, false, false, 1);
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99990, 1.00095);
         feedCandle(h.eng, B + 60, 1.0000, 1.00100, 0.99990, 1.00095);
@@ -179,7 +179,7 @@ public class SignalsEngineTest {
 
     // ── ENGULFING ─────────────────────────────────────────────────────
 
-    @Test public void bullishEngulfing() {
+    @Test public void bullishEngulfing() throws Exception {
         Harness h = makeEngine(strat("engulfing"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.0010, 1.0012, 1.0000, 1.0002);        // red
         feedCandle(h.eng, B + 60, 1.0001, 1.0013, 0.9999, 1.0011);   // green engulfs
@@ -188,7 +188,7 @@ public class SignalsEngineTest {
         assertEquals("call", h.sigs.get(0).direction);
     }
 
-    @Test public void bearishEngulfing() {
+    @Test public void bearishEngulfing() throws Exception {
         Harness h = makeEngine(strat("engulfing"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.0002, 1.0012, 1.0000, 1.0010);        // green
         feedCandle(h.eng, B + 60, 1.0011, 1.0013, 0.9999, 1.0001);   // red engulfs
@@ -196,7 +196,7 @@ public class SignalsEngineTest {
         assertEquals("put", h.sigs.get(0).direction);
     }
 
-    @Test public void partialCoverNoEngulfing() {
+    @Test public void partialCoverNoEngulfing() throws Exception {
         Harness h = makeEngine(strat("engulfing"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.0010, 1.0012, 1.0000, 1.0002);        // red
         feedCandle(h.eng, B + 60, 1.0003, 1.0011, 0.9999, 1.0009);   // close < prev open
@@ -205,7 +205,7 @@ public class SignalsEngineTest {
 
     // ── PIN BAR ───────────────────────────────────────────────────────
 
-    @Test public void hammerPinbar() {
+    @Test public void hammerPinbar() throws Exception {
         Harness h = makeEngine(strat("pinbar"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.00080, 1.00090, 0.99900, 1.00085);    // long lower wick
         assertEquals(1, h.sigs.size());
@@ -213,14 +213,14 @@ public class SignalsEngineTest {
         assertEquals("call", h.sigs.get(0).direction);
     }
 
-    @Test public void shootingStarPinbar() {
+    @Test public void shootingStarPinbar() throws Exception {
         Harness h = makeEngine(strat("pinbar"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.00020, 1.00190, 1.00010, 1.00015);    // long upper wick
         assertEquals(1, h.sigs.size());
         assertEquals("put", h.sigs.get(0).direction);
     }
 
-    @Test public void shortWickNoPinbar() {
+    @Test public void shortWickNoPinbar() throws Exception {
         Harness h = makeEngine(strat("pinbar"), tfs(60), 85.0, false, false, 0);
         feedCandle(h.eng, B, 1.0000, 1.00100, 0.99950, 1.00060);     // wick ~33%
         assertEquals(0, h.sigs.size());
@@ -230,7 +230,7 @@ public class SignalsEngineTest {
 
     static class TrendRun { Harness h; double p; }
 
-    static TrendRun uptrend(boolean trendFilter) {
+    static TrendRun uptrend(boolean trendFilter) throws Exception {
         TrendRun r = new TrendRun();
         r.h = makeEngine(strat("perfect"), tfs(60), 85.0, trendFilter, false, 0);
         double p = 1.0000;
@@ -243,7 +243,7 @@ public class SignalsEngineTest {
         return r;
     }
 
-    @Test public void trendFilterBlocksCounterTrend() {
+    @Test public void trendFilterBlocksCounterTrend() throws Exception {
         TrendRun r = uptrend(true);
         int n0 = r.h.sigs.size();
         feedCandle(r.h.eng, B + 55 * 60L, r.p, r.p + 0.00005, r.p - 0.00105, r.p - 0.0010);
@@ -253,7 +253,7 @@ public class SignalsEngineTest {
         assertTrue(blockedPerfect);
     }
 
-    @Test public void trendFilterOffAllowsCounterTrend() {
+    @Test public void trendFilterOffAllowsCounterTrend() throws Exception {
         TrendRun r = uptrend(false);
         int n0 = r.h.sigs.size();
         feedCandle(r.h.eng, B + 55 * 60L, r.p, r.p + 0.00005, r.p - 0.00105, r.p - 0.0010);
@@ -263,7 +263,7 @@ public class SignalsEngineTest {
 
     // ── RSI FILTER ────────────────────────────────────────────────────
 
-    static TrendRun rising(boolean rsiFilter) {
+    static TrendRun rising(boolean rsiFilter) throws Exception {
         TrendRun r = new TrendRun();
         r.h = makeEngine(strat("perfect"), tfs(60), 85.0, false, rsiFilter, 0);
         double p = 1.0000;
@@ -276,7 +276,7 @@ public class SignalsEngineTest {
         return r;
     }
 
-    @Test public void rsiFilterBlocksCallAt100() {
+    @Test public void rsiFilterBlocksCallAt100() throws Exception {
         TrendRun r = rising(true);
         int n0 = r.h.sigs.size();
         feedCandle(r.h.eng, B + 20 * 60L, r.p, r.p + 0.0010, r.p - 0.0001, r.p + 0.00095);
@@ -284,7 +284,7 @@ public class SignalsEngineTest {
         assertTrue(r.h.blocked.size() >= 1);
     }
 
-    @Test public void rsiFilterOffAllows() {
+    @Test public void rsiFilterOffAllows() throws Exception {
         TrendRun r = rising(false);
         int n0 = r.h.sigs.size();
         feedCandle(r.h.eng, B + 20 * 60L, r.p, r.p + 0.0010, r.p - 0.0001, r.p + 0.00095);
@@ -293,7 +293,7 @@ public class SignalsEngineTest {
 
     // ── STRENGTH GRADE ────────────────────────────────────────────────
 
-    @Test public void withTrendPerfectIsStrong() {
+    @Test public void withTrendPerfectIsStrong() throws Exception {
         TrendRun r = uptrend(true);
         feedCandle(r.h.eng, B + 55 * 60L, r.p, r.p + 0.0010, r.p - 0.0001, r.p + 0.00095);
         SignalsEngine.Signal s = r.h.sigs.get(r.h.sigs.size() - 1);
@@ -301,7 +301,7 @@ public class SignalsEngineTest {
         assertTrue(s.strength >= 3);
     }
 
-    @Test public void confluenceFiresBothStrategies() {
+    @Test public void confluenceFiresBothStrategies() throws Exception {
         Harness h = makeEngine(strat("perfect", "engulfing"), tfs(60), 85.0, false, false, 0);
         h.eng.feed("EURUSD_otc", ohlc(B, 1.0010, 1.00115, 1.00090, 1.00095));       // red
         h.eng.feed("EURUSD_otc", ohlc(B + 60, 1.00090, 1.00122, 1.00088, 1.00120));  // engulfs + body 88%
@@ -317,7 +317,7 @@ public class SignalsEngineTest {
 
     // ── PER-KIND RESULT STATS ─────────────────────────────────────────
 
-    @Test public void perKindLossStats() {
+    @Test public void perKindLossStats() throws Exception {
         Harness h = makeEngine(strat("perfect", "engulfing"), tfs(60), 85.0, false, false, 0);
         h.eng.feed("EURUSD_otc", ohlc(B, 1.0010, 1.00115, 1.00090, 1.00095));        // red
         h.eng.feed("EURUSD_otc", ohlc(B + 60, 1.00090, 1.00122, 1.00088, 1.00120));  // perfect+engulfing CALL
@@ -330,7 +330,7 @@ public class SignalsEngineTest {
 
     // ── PAYLOAD SHAPES ────────────────────────────────────────────────
 
-    @Test public void payloadShapes() {
+    @Test public void payloadShapes() throws Exception {
         List<SignalsEngine.Point> ms = SignalsEngine.extractPoints(
                 tick(1700000000000L, 1.5));
         assertEquals(1, ms.size());
