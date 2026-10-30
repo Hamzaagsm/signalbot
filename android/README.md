@@ -11,6 +11,16 @@ grade (STRONG), WIN/LOSS result tracking overall + per strategy,
 Qx Bot's Socket.IO polling client (OkHttp + DNS-over-HTTPS) with the
 order API removed.
 
+## Signal sources (v1.2)
+- **Quotex Feed** — Quotex OTC candles (Quotex login).
+- **IQ Option Feed** — IQ Option candles (own IQ Option login on the
+  login screen; PRACTICE/DEMO by default; regular pairs in market
+  hours, OTC pairs when the market is closed). Same iqoptionapi
+  protocol as the EXE, read-only: login, balances, candles — no orders.
+- **Real Market Feed** — Yahoo Finance quotes, no login at all.
+
+Stats are tracked separately per (source, strategy), like the EXE.
+
 Build: GitHub Actions workflow `.github/workflows/build-apk.yml`
 (runs the JVM unit tests, then `gradle assembleRelease`). The release
 build is signed with the debug key — the same approach the Hamza Qx Bot
