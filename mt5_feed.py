@@ -54,6 +54,17 @@ try:  # Windows-only package; guarded so the module imports anywhere.
 except Exception:  # pragma: no cover - exercised on non-Windows dev
     mt5 = None
 
+try:
+    # MetaTrader5's native core builds NUMPY arrays for
+    # copy_rates_from() / copy_ticks_from(). If numpy is not inside
+    # the frozen EXE those calls fail on the user's PC, so it is
+    # imported here — mt5_feed is bundled by PyInstaller, and its
+    # imports get collected with it (verified in the v1.3 build:
+    # without this line numpy was missing from the PYZ).
+    import numpy  # noqa: F401
+except Exception:  # pragma: no cover
+    numpy = None
+
 SOURCE_ID = "mt5"
 SOURCE_LABEL = "MT5"
 
